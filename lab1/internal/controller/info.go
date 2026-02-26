@@ -2,21 +2,19 @@ package controller
 
 import (
 	"encoding/json"
+	"lab1/internal/dto"
+	"lab1/internal/service"
 	"net/http"
-
-	"go-lab1/internal/dto"
-	"go-lab1/internal/service"
 )
 
 type InfoController struct {
-	service service.InfoService // Инъекция зависимости (Dependency Inversion)
+	service service.InfoService
 }
 
 func NewInfoController(s service.InfoService) *InfoController {
 	return &InfoController{service: s}
 }
 
-// writeJSON - вспомогательный метод для отправки DTO
 func writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(data); err != nil {
@@ -30,7 +28,6 @@ func (c *InfoController) ServerInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *InfoController) ClientInfo(w http.ResponseWriter, r *http.Request) {
-	// IP и User-Agent берем прямо из запроса, сервис тут не нужен
 	data := dto.ClientInfoDTO{
 		IPAddress: r.RemoteAddr,
 		UserAgent: r.UserAgent(),
