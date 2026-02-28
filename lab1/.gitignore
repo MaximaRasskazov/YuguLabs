@@ -1,1 +1,2 @@
 -e ".env\n/bin\nvendor/" 
+.env
