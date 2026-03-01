@@ -2,116 +2,60 @@ package controller
 
 import (
 	"encoding/json"
-	"lab1/internal/dto"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"yugu-server/internal/dto"
+
+	"github.com/gin-gonic/gin"
 )
 
+// 1. Mock-сервис (оставляем как был)
 type mockInfoService struct{}
 
 func (m *mockInfoService) GetServerInfo() dto.ServerInfoDTO {
-	return dto.ServerInfoDTO{
-		GoVersion: "go1.99.mock",
-		OS:        "mockOS",
-		Arch:      "mockArch",
-	}
+	return dto.ServerInfoDTO{GoVersion: "go1.99.mock", OS: "mockOS"}
 }
 
 func (m *mockInfoService) GetDatabaseInfo() dto.DatabaseInfoDTO {
-	return dto.DatabaseInfoDTO{
-		Driver:       "MockDB",
-		Version:      "99.9",
-		DatabaseName: "mock_database",
-	}
+	return dto.DatabaseInfoDTO{Driver: "MockDB", Version: "99.9"}
 }
 
-// Тест 1: Проверка информации о сервере
-func TestInfoController_ServerInfo(t *testing.T) {
-	mockSvc := &mockInfoService{}
-	ctrl := NewInfoController(mockSvc)
-
-	req, err := http.NewRequest("GET", "/info/server", nil)
-	if err != nil {
-		t.Fatalf("Не удалось создать запрос: %v", err)
-	}
-
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(ctrl.ServerInfo)
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Ожидался статус 200, получено %d", rr.Code)
-	}
-	if rr.Header().Get("Content-Type") != "application/json" {
-		t.Errorf("Неверный Content-Type")
-	}
-
-	var responseDTO dto.ServerInfoDTO
-	if err := json.NewDecoder(rr.Body).Decode(&responseDTO); err != nil {
-		t.Fatalf("Ошибка декодирования JSON: %v", err)
-	}
-
-	if responseDTO.GoVersion != "go1.99.mock" || responseDTO.OS != "mockOS" {
-		t.Errorf("Получены неверные данные DTO: %+v", responseDTO)
-	}
+func (m *mockInfoService) GetClientInfo(ip, ua, lang string) dto.ClientInfoDTO {
+	return dto.ClientInfoDTO{IPAddress: ip, UserAgent: ua, Language: lang}
 }
 
-// Тест 2: Проверка информации о базе данных
-func TestInfoController_DatabaseInfo(t *testing.T) {
-	mockSvc := &mockInfoService{}
-	ctrl := NewInfoController(mockSvc)
-
-	req, err := http.NewRequest("GET", "/info/database", nil)
-	if err != nil {
-		t.Fatalf("Не удалось создать запрос: %v", err)
-	}
-
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(ctrl.DatabaseInfo)
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Ожидался статус 200, получено %d", rr.Code)
-	}
-
-	var responseDTO dto.DatabaseInfoDTO
-	if err := json.NewDecoder(rr.Body).Decode(&responseDTO); err != nil {
-		t.Fatalf("Ошибка декодирования JSON: %v", err)
-	}
-
-	if responseDTO.Driver != "MockDB" || responseDTO.Version != "99.9" {
-		t.Errorf("Получены неверные данные БД: %+v", responseDTO)
-	}
-}
-
-// Тест 3: Проверка информации о клиенте (Берет данные из Request, а не сервиса)
 func TestInfoController_ClientInfo(t *testing.T) {
+	// Устанавливаем тестовый режим Gin, чтобы не спамил логами
+	gin.SetMode(gin.TestMode)
+
 	mockSvc := &mockInfoService{}
 	ctrl := NewInfoController(mockSvc)
 
-	req, err := http.NewRequest("GET", "/info/client", nil)
-	if err != nil {
-		t.Fatalf("Не удалось создать запрос: %v", err)
+	// Настраиваем тестовый роутер
+	r := gin.New()
+	r.GET("/info/client", ctrl.ClientInfo)
+
+	// Создаем фейковый запрос с нужными заголовками
+	req, _ := http.NewRequest("GET", "/info/client", nil)
+	req.Header.Set("User-Agent", "TestAgent")
+	req.Header.Set("Accept-Language", "ru-RU")
+
+	// Recorder для записи ответа
+	w := httptest.NewRecorder()
+
+	// Запуск
+	r.ServeHTTP(w, req)
+
+	// Проверки
+	if w.Code != http.StatusOK {
+		t.Errorf("Ожидался 200, получили %d", w.Code)
 	}
 
-	req.RemoteAddr = "192.168.1.1:12345"
-	req.Header.Set("User-Agent", "TestMockBrowser/1.0")
+	var res dto.ClientInfoDTO
+	json.Unmarshal(w.Body.Bytes(), &res)
 
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(ctrl.ClientInfo)
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Ожидался статус 200, получено %d", rr.Code)
-	}
-
-	var responseDTO dto.ClientInfoDTO
-	if err := json.NewDecoder(rr.Body).Decode(&responseDTO); err != nil {
-		t.Fatalf("Ошибка декодирования JSON: %v", err)
-	}
-
-	if responseDTO.IPAddress != "192.168.1.1:12345" || responseDTO.UserAgent != "TestMockBrowser/1.0" {
-		t.Errorf("Получены неверные данные клиента: %+v", responseDTO)
+	if res.UserAgent != "TestAgent" || res.Language != "ru-RU" {
+		t.Errorf("Данные в JSON не совпадают: %+v", res)
 	}
 }

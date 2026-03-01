@@ -1,13 +1,14 @@
 package service
 
 import (
-	"lab1/internal/dto"
 	"runtime"
+	"yugu-server/internal/dto"
 )
 
 type InfoService interface {
 	GetServerInfo() dto.ServerInfoDTO
 	GetDatabaseInfo() dto.DatabaseInfoDTO
+	GetClientInfo(ip, userAgent, lang string) dto.ClientInfoDTO
 }
 
 type infoServiceImpl struct {
@@ -31,5 +32,13 @@ func (s *infoServiceImpl) GetDatabaseInfo() dto.DatabaseInfoDTO {
 		Driver:       "PostgreSQL",
 		Version:      "15.4",
 		DatabaseName: "lab1_db",
+	}
+}
+
+func (s *infoServiceImpl) GetClientInfo(ip, userAgent, lang string) dto.ClientInfoDTO {
+	return dto.ClientInfoDTO{
+		IPAddress: ip,
+		UserAgent: userAgent,
+		Language:  lang,
 	}
 }

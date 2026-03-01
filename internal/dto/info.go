@@ -9,6 +9,7 @@ type ServerInfoDTO struct {
 type ClientInfoDTO struct {
 	IPAddress string `json:"ip_address"`
 	UserAgent string `json:"user_agent"`
+	Language  string `json:"language"`
 }
 
 type DatabaseInfoDTO struct {

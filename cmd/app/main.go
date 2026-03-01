@@ -2,32 +2,33 @@ package main
 
 import (
 	"fmt"
-	"lab1/internal/controller"
-	"lab1/internal/service"
 	"log"
-	"net/http"
 	"time"
+	"yugu-server/internal/controller"
+	"yugu-server/internal/router"
+	"yugu-server/internal/service"
 )
 
 func main() {
-	loc, err := time.LoadLocation("Europe/Moscow")
-	if err != nil {
-		log.Fatalf("Ошибка загрузки временной зоны: %v", err)
-	}
+	// 1. Инициализация слоев
+	svc := service.NewInfoService()
+	ctrl := controller.NewInfoController(svc)
+
+	// 2. Настройка роутера (Здесь Gin выведет свои debug-сообщения)
+	r := router.SetupRouter(ctrl)
+
+	// 3. Настройка таймзоны
+	loc, _ := time.LoadLocation("Europe/Moscow")
 	time.Local = loc
-	fmt.Printf("Установлена временная зона: %s\n", time.Local.String())
 
-	infoService := service.NewInfoService()
-	infoController := controller.NewInfoController(infoService)
+	// 4. Твой кастомный вывод (теперь он будет в самом низу)
+	fmt.Println("-----------------------------------------------")
+	fmt.Printf("⏰ Таймзона установлена: %s\n", time.Local.String())
+	fmt.Printf("🚀 Yugu Server запущен на http://127.0.0.1:8000\n")
+	fmt.Println("-----------------------------------------------")
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /info/server", infoController.ServerInfo)
-	mux.HandleFunc("GET /info/client", infoController.ClientInfo)
-	mux.HandleFunc("GET /info/database", infoController.DatabaseInfo)
-
-	port := ":8000"
-	fmt.Printf("Сервер запущен на http://127.0.0.1%s\n", port)
-	if err := http.ListenAndServe(port, mux); err != nil {
-		log.Fatalf("Ошибка запуска сервера: %v", err)
+	// 5. Запуск (Gin начнет слушать порт и больше не будет спамить до прихода запроса)
+	if err := r.Run(":8000"); err != nil {
+		log.Fatalf("Ошибка запуска: %v", err)
 	}
 }
