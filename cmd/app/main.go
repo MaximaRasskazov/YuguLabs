@@ -16,6 +16,10 @@ import (
 )
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+        log.Println("Файл .env не найден, используются переменные окружения по умолчанию")
+    }
+	
 	db := repository.SetupDatabase()
 
 	// Регистрация кастомных валидаторов для Gin
