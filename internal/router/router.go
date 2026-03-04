@@ -7,10 +7,8 @@ import (
 )
 
 func SetupRouter(infoCtrl *controller.InfoController) *gin.Engine {
-	// Создаем роутер Gin со стандартными логами и защитой от падений
 	r := gin.Default()
 
-	// Группируем маршруты (удобно для масштабирования API)
 	infoGroup := r.Group("/info")
 	{
 		infoGroup.GET("/server", infoCtrl.ServerInfo)
