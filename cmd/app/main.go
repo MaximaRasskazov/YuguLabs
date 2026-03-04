@@ -4,12 +4,27 @@ import (
 	"fmt"
 	"log"
 	"time"
+
 	"yugu-server/internal/controller"
+	"yugu-server/internal/repository"
 	"yugu-server/internal/router"
 	"yugu-server/internal/service"
+	customValidator "yugu-server/internal/validator" 
+
+	"github.com/gin-gonic/gin/binding"
+	"github.com/go-playground/validator/v10"
 )
 
 func main() {
+	db := repository.SetupDatabase()
+
+	// Регистрация кастомных валидаторов для Gin
+	if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
+		v.RegisterValidation("alpha_capital", customValidator.ValidateUsername)
+		v.RegisterValidation("password_complex", customValidator.ValidatePassword)
+		v.RegisterValidation("age_14", customValidator.ValidateAge14)
+	}
+
 	svc := service.NewInfoService()
 	ctrl := controller.NewInfoController(svc)
 
