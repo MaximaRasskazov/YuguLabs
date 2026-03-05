@@ -11,6 +11,7 @@ import (
 	"yugu-server/internal/service"
 	customValidator "yugu-server/internal/validator" 
 
+	"github.com/joho/godotenv"
 	"github.com/gin-gonic/gin/binding"
 	"github.com/go-playground/validator/v10"
 )
