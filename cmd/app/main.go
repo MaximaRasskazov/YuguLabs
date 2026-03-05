@@ -29,10 +29,14 @@ func main() {
 		v.RegisterValidation("age_14", customValidator.ValidateAge14)
 	}
 
-	svc := service.NewInfoService()
-	ctrl := controller.NewInfoController(svc)
+	infoSvc := service.NewInfoService()
+	infoCtrl := controller.NewInfoController(infoSvc)
 
-	r := router.SetupRouter(ctrl)
+	tokenSvc := service.NewTokenService(db)
+	authSvc := service.NewAuthService(db, tokenSvc)
+	authCtrl := controller.NewAuthController(authSvc)
+
+	r := router.SetupRouter(infoCtrl, authCtrl)
 
 	loc, _ := time.LoadLocation("Europe/Moscow")
 	time.Local = loc
