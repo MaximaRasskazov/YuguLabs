@@ -4,18 +4,24 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
+	"yugu-server/internal/dto"
 	"yugu-server/internal/repository"
 )
 
 type TokenService interface {
 	GenerateTokens(userID uint, userAgent, ip string) (string, string, error)
+	GetActiveSessions(userID uint) ([]dto.SessionDTO, error)
+	RevokeAllSessions(userID uint) error
+	
+	RefreshTokens(oldRefreshToken, userAgent, ip string) (string, string, error)
+	RevokeSession(refreshToken string) error
 }
 
 type tokenServiceImpl struct {
@@ -79,4 +85,54 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func (s *tokenServiceImpl) GetActiveSessions(userID uint) ([]dto.SessionDTO, error) {
+	var sessions []repository.TokenSession
+
+	if err := s.db.Where("user_id = ?", userID).Find(&sessions).Error; err != nil {
+		return nil, err
+	}
+
+	var result []dto.SessionDTO
+	for _, session := range sessions {
+		result = append(result, dto.SessionDTO{
+			ID:        session.ID,
+			UserAgent: session.UserAgent,
+			IPAddress: session.IPAddress,
+			ExpiresAt: session.ExpiresAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+
+	return result, nil
+}
+
+func (s *tokenServiceImpl) RevokeAllSessions(userID uint) error {
+	return s.db.Where("user_id = ?", userID).Delete(&repository.TokenSession{}).Error
+}
+
+func (s *tokenServiceImpl) RefreshTokens(oldRefreshToken, userAgent, ip string) (string, string, error) {
+	hash := sha256.Sum256([]byte(oldRefreshToken))
+	tokenHash := hex.EncodeToString(hash[:])
+
+	var session repository.TokenSession
+	if err := s.db.Where("token_hash = ?", tokenHash).First(&session).Error; err != nil {
+		return "", "", errors.New("неверный или уже использованный refresh токен")
+	}
+
+	if time.Now().After(session.ExpiresAt) {
+		s.db.Delete(&session) // Удаляем просроченный мусор
+		return "", "", errors.New("refresh токен просрочен, авторизуйтесь заново")
+	}
+
+	s.db.Delete(&session)
+
+	return s.GenerateTokens(session.UserID, userAgent, ip)
+}
+
+func (s *tokenServiceImpl) RevokeSession(refreshToken string) error {
+	hash := sha256.Sum256([]byte(refreshToken))
+	tokenHash := hex.EncodeToString(hash[:])
+	
+	return s.db.Where("token_hash = ?", tokenHash).Delete(&repository.TokenSession{}).Error
 }

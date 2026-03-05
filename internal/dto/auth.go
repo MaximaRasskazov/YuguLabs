@@ -35,3 +35,14 @@ type TokenListDTO struct {
 	UserAgent string `json:"user_agent"`
 	IPAddress string `json:"ip_address"`
 }
+
+type SessionDTO struct {
+	ID        uint   `json:"id"`
+	UserAgent string `json:"user_agent"`
+	IPAddress string `json:"ip_address"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+type RefreshRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}

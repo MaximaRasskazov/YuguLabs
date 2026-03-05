@@ -2,6 +2,7 @@ package router
 
 import (
 	"yugu-server/internal/controller"
+	"yugu-server/internal/middleware"
 
 	"github.com/gin-gonic/gin"
 )
@@ -20,6 +21,13 @@ func SetupRouter(infoCtrl *controller.InfoController, authCtrl *controller.AuthC
 	{
 		authGroup.POST("/register", authCtrl.Register)
 		authGroup.POST("/login", authCtrl.Login)
+		authGroup.POST("/refresh", authCtrl.Refresh)
+
+		// Защищенные
+		authGroup.GET("/me", middleware.AuthRequired(), authCtrl.Me)
+		authGroup.GET("/tokens", middleware.AuthRequired(), authCtrl.GetTokens)       
+		authGroup.POST("/out_all", middleware.AuthRequired(), authCtrl.LogoutAll)
+		authGroup.POST("/out", middleware.AuthRequired(), authCtrl.Logout)    
 	}
 
 	return r
