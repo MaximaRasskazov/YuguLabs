@@ -16,9 +16,6 @@
    JWT_SECRET=super_secret_yugu_key_123
    ```
 
-
----
-
 ## 📡 API Эндпоинты
 
 ### Публичные маршруты
