@@ -8,18 +8,18 @@ import (
 	"os"
 	"strconv"
 	"time"
+	"yugu-server/internal/dto"
+	"yugu-server/internal/repository"
 
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
-	"yugu-server/internal/dto"
-	"yugu-server/internal/repository"
 )
 
 type TokenService interface {
 	GenerateTokens(userID uint, userAgent, ip string) (string, string, error)
 	GetActiveSessions(userID uint) ([]dto.SessionDTO, error)
 	RevokeAllSessions(userID uint) error
-	
+
 	RefreshTokens(oldRefreshToken, userAgent, ip string) (string, string, error)
 	RevokeSession(refreshToken string) error
 }
@@ -72,7 +72,7 @@ func (s *tokenServiceImpl) GenerateTokens(userID uint, userAgent, ip string) (st
 		IPAddress: ip,
 		ExpiresAt: time.Now().Add(time.Duration(refreshTTL) * time.Minute),
 	}
-	
+
 	if err := s.db.Create(&session).Error; err != nil {
 		return "", "", err
 	}
@@ -133,6 +133,6 @@ func (s *tokenServiceImpl) RefreshTokens(oldRefreshToken, userAgent, ip string) 
 func (s *tokenServiceImpl) RevokeSession(refreshToken string) error {
 	hash := sha256.Sum256([]byte(refreshToken))
 	tokenHash := hex.EncodeToString(hash[:])
-	
+
 	return s.db.Where("token_hash = ?", tokenHash).Delete(&repository.TokenSession{}).Error
 }

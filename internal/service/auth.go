@@ -2,13 +2,13 @@ package service
 
 import (
 	"errors"
-	"time"
 	"log"
+	"time"
+	"yugu-server/internal/dto"
+	"yugu-server/internal/repository"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
-	"yugu-server/internal/dto"
-	"yugu-server/internal/repository"
 )
 
 type AuthService interface {
@@ -16,8 +16,8 @@ type AuthService interface {
 	Login(req dto.LoginRequest, userAgent, ip string) (dto.AuthSuccessDTO, error)
 	GetMe(userID uint) (dto.UserDTO, error)
 	GetTokens(userID uint) ([]dto.SessionDTO, error)
-	LogoutAll(userID uint) error 
-	
+	LogoutAll(userID uint) error
+
 	RefreshTokens(req dto.RefreshRequest, userAgent, ip string) (dto.AuthSuccessDTO, error)
 	Logout(req dto.RefreshRequest) error
 }
@@ -32,6 +32,18 @@ func NewAuthService(db *gorm.DB, ts TokenService) AuthService {
 }
 
 func (s *authServiceImpl) Register(req dto.RegisterRequest) (dto.UserDTO, error) {
+	var existingUser repository.User
+
+	// Ищем по юзернейму
+	if err := s.db.Where("username = ?", req.Username).First(&existingUser).Error; err == nil {
+		return dto.UserDTO{}, errors.New("Пользователь с таким логином уже существует")
+	}
+
+	// Ищем по email
+	if err := s.db.Where("email = ?", req.Email).First(&existingUser).Error; err == nil {
+		return dto.UserDTO{}, errors.New("Данная почта уже зарегистрирована")
+	}
+
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return dto.UserDTO{}, err
@@ -39,7 +51,6 @@ func (s *authServiceImpl) Register(req dto.RegisterRequest) (dto.UserDTO, error)
 
 	birthday, _ := time.Parse("2006-01-02", req.Birthday)
 
-	// модель для БД
 	user := repository.User{
 		Username: req.Username,
 		Email:    req.Email,
@@ -49,7 +60,7 @@ func (s *authServiceImpl) Register(req dto.RegisterRequest) (dto.UserDTO, error)
 
 	if err := s.db.Create(&user).Error; err != nil {
 		log.Printf("Реальная ошибка: %v\n", err)
-		return dto.UserDTO{}, errors.New("пользователь с таким логином или email уже существует")
+		return dto.UserDTO{}, errors.New("Ошибка при создании пользователя")
 	}
 
 	return dto.UserDTO{
@@ -90,7 +101,7 @@ func (s *authServiceImpl) Login(req dto.LoginRequest, userAgent, ip string) (dto
 
 func (s *authServiceImpl) GetMe(userID uint) (dto.UserDTO, error) {
 	var user repository.User
-	
+
 	if err := s.db.First(&user, userID).Error; err != nil {
 		return dto.UserDTO{}, errors.New("пользователь не найден")
 	}

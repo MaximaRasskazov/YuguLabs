@@ -3,6 +3,8 @@ package service
 import (
 	"runtime"
 	"yugu-server/internal/dto"
+
+	"gorm.io/gorm"
 )
 
 type InfoService interface {
@@ -12,11 +14,11 @@ type InfoService interface {
 }
 
 type infoServiceImpl struct {
-	// Добавить пул соединений с БД (sql.DB)
+	db *gorm.DB
 }
 
-func NewInfoService() InfoService {
-	return &infoServiceImpl{}
+func NewInfoService(db *gorm.DB) InfoService {
+	return &infoServiceImpl{db: db}
 }
 
 func (s *infoServiceImpl) GetServerInfo() dto.ServerInfoDTO {
@@ -28,10 +30,20 @@ func (s *infoServiceImpl) GetServerInfo() dto.ServerInfoDTO {
 }
 
 func (s *infoServiceImpl) GetDatabaseInfo() dto.DatabaseInfoDTO {
+	var version string
+
+	if s.db != nil {
+		s.db.Raw("SELECT sqlite_version()").Scan(&version)
+	}
+
+	if version == "" {
+		version = "unknown"
+	}
+
 	return dto.DatabaseInfoDTO{
-		Driver:       "PostgreSQL",
-		Version:      "15.4",
-		DatabaseName: "lab1_db",
+		Driver:       "SQLite3",
+		Version:      version,
+		DatabaseName: "app.db",
 	}
 }
 
