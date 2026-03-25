@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
-
-	"github.com/gin-gonic/gin"
 	"yugu-server/internal/dto"
 	"yugu-server/internal/service"
+
+	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 )
 
 type AuthController struct {
@@ -21,8 +23,8 @@ func (c *AuthController) Register(ctx *gin.Context) {
 
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusUnprocessableEntity, gin.H{
-			"error":   "Ошибка валидации данных",
-			"details": err.Error(),
+			"error":   "Ошибка проверки данных",
+			"details": translateError(err),
 		})
 		return
 	}
@@ -39,9 +41,11 @@ func (c *AuthController) Register(ctx *gin.Context) {
 func (c *AuthController) Login(ctx *gin.Context) {
 	var req dto.LoginRequest
 
-	// username и password
 	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"error": "Некорректный запрос"})
+		ctx.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error":   "Ошибка проверки данных",
+			"details": translateError(err),
+		})
 		return
 	}
 
@@ -140,4 +144,36 @@ func (c *AuthController) Logout(ctx *gin.Context) {
 
 	_ = c.authService.Logout(req) // Ошибку игнорируем, если токена нет - значит уже вышли
 	ctx.JSON(http.StatusOK, gin.H{"message": "Успешный выход"})
+}
+
+// Функция-переводчик для валидатора
+func translateError(err error) string {
+	var ve validator.ValidationErrors
+	if errors.As(err, &ve) {
+		out := ""
+		for _, fe := range ve {
+			switch fe.Tag() {
+			case "required":
+				out += "Поле '" + fe.Field() + "' обязательно для заполнения. "
+			case "min":
+				out += "Поле '" + fe.Field() + "' слишком короткое (минимум " + fe.Param() + " симв.). "
+			case "email":
+				out += "Неверный формат почты. "
+			case "alpha_capital":
+				out += "Логин должен начинаться с большой буквы и содержать только латиницу. "
+			case "password_complex":
+				out += "Пароль должен быть сложным (цифры, спецсимволы, разные регистры). "
+			case "eqfield":
+				out += "Введенные пароли не совпадают. "
+			case "datetime":
+				out += "Неверный формат даты (ожидается ГГГГ-ММ-ДД). "
+			case "age_14":
+				out += "Регистрация разрешена только с 14 лет. "
+			default:
+				out += "Ошибка в поле '" + fe.Field() + "'. "
+			}
+		}
+		return out
+	}
+	return "Некорректный формат данных."
 }
