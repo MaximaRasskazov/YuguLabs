@@ -4,33 +4,35 @@ import (
 	"fmt"
 	"log"
 	"time"
-
 	"yugu-server/internal/controller"
 	"yugu-server/internal/repository"
 	"yugu-server/internal/router"
 	"yugu-server/internal/service"
-	customValidator "yugu-server/internal/validator" 
 
-	"github.com/joho/godotenv"
+	customValidator "yugu-server/internal/validator"
+
 	"github.com/gin-gonic/gin/binding"
 	"github.com/go-playground/validator/v10"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// gin.SetMode(gin.ReleaseMode)
+
 	if err := godotenv.Load(); err != nil {
-        log.Println("Файл .env не найден, используются переменные окружения по умолчанию")
-    }
-	
+		log.Println("Файл .env не найден, используются переменные окружения по умолчанию")
+	}
+
 	db := repository.SetupDatabase()
 
-	// Регистрация кастомных валидаторов для Gin
+	// КастВалидаторы для рега (dto)
 	if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
 		v.RegisterValidation("alpha_capital", customValidator.ValidateUsername)
 		v.RegisterValidation("password_complex", customValidator.ValidatePassword)
 		v.RegisterValidation("age_14", customValidator.ValidateAge14)
 	}
 
-	infoSvc := service.NewInfoService()
+	infoSvc := service.NewInfoService(db)
 	infoCtrl := controller.NewInfoController(infoSvc)
 
 	tokenSvc := service.NewTokenService(db)
@@ -38,6 +40,7 @@ func main() {
 	authCtrl := controller.NewAuthController(authSvc)
 
 	r := router.SetupRouter(infoCtrl, authCtrl)
+	// gin.SetMode(gin.ReleaseMode)
 
 	loc, _ := time.LoadLocation("Europe/Moscow")
 	time.Local = loc

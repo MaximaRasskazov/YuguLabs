@@ -1,78 +1,111 @@
-# @baseUrl = http://127.0.0.1:8000
+//@baseUrl = http://127.0.0.1:8000
 @baseUrl = http://localhost:8000
-@accessToken = {{login.response.body.access_token}}
-@refreshToken = {{login.response.body.refresh_token}}
 
+### РЕГИСТРАЦИЯ
+### 1.1 Ошибка валидации
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
 
+{
+    "username": "student_bad", 
+    "email": "not-an-email",
+    "password": "123",
+    "c_password": "321",
+    "birthday": "10-22-2005"
+}
 
-// 2. ПУБЛИЧНЫЕ МАРШРУТЫ
-### 1.1 Инфо о сервере
-GET {{baseUrl}}/info/server
-
-### 1.2 Регистрация пользователя
+### 1.2 Успешная регистрация
 POST {{baseUrl}}/api/auth/register
 Content-Type: application/json
 
 {
     "username": "Student",
     "email": "student@gmail.com",
-    "password": "Secret_123!",
-    "c_password": "Secret_123",
+    "password": "Password_1!",
+    "c_password": "Password_1!",
     "birthday": "2005-11-22"
 }
 
-### 1.3 Авторизация (Логин)
+### 1.3 Ошибка дубликата
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+    "username": "Student",
+    "email": "student2@gmail.com",
+    "password": "Password_1!",
+    "c_password": "Password_1!",
+    "birthday": "2005-11-22"
+}
+
+### 1.4 Ошибка дубликата (уже с почтой)
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+    "username": "Studentt",
+    "email": "student@gmail.com",
+    "password": "Password_1!",
+    "c_password": "Password_1!",
+}
+
+
+
+### АВТОРИЗАЦИЯ И ТОКЕНЫ
+### 2.1 Логин
 # @name login
 POST {{baseUrl}}/api/auth/login
 Content-Type: application/json
-User-Agent: VSCode-RestClient/1.0
+User-Agent: VSCode-REST-Client/1.0
 
 {
-    "username": "AiStudent",
-    "password": "SuperSecretPassword1!"
+    "username": "Student",
+    "password": "Password_1!"
 }
 
 
 
-// 2. ЗАЩИЩЕННЫЕ МАРШРУТЫ
+@accessToken = {{login.response.body.access_token}}
+@refreshToken = {{login.response.body.refresh_token}}
 
-### 2.1 Получить данные о себе
+### ЗАЩИЩЕННЫЕ МАРШРУТЫ
+### 3.1 Получение профиля
 GET {{baseUrl}}/api/auth/me
-Authorization: Bearer {{accessToken}}
+# Authorization: Bearer 
+# Authorization: Bearer {{accessToken}}
 
-### 2.2 Посмотреть свои активные сессии
+### 3.2 Получение списка активных сессий
 GET {{baseUrl}}/api/auth/tokens
-Authorization: Bearer {{accessToken}}
+# Authorization: Bearer
+# Authorization: Bearer {{accessToken}}
 
 
 
-// 3. УПРАВЛЕНИЕ СЕССИЯМИ (Обновление и Выход)
-### 3.1 Обновить токены (Refresh)
+### ОБНОВЛЕНИЕ СЕССИИ И ВЫХОД
+### 4.1 Обновление токенов (Refresh)
+# @name refresh
 POST {{baseUrl}}/api/auth/refresh
 Content-Type: application/json
+User-Agent: VSCode-REST-Client/1.0
 
 {
     "refresh_token": "{{refreshToken}}"
 }
 
-### 3.2 Выйти с текущего устройства (Удалить конкретную сессию)
+### новые токены 
+@newAccessToken = {{refresh.response.body.access_token}}
+@newRefreshToken = {{refresh.response.body.refresh_token}}
+
+
+### 4.2 Выход с текущего устройства (Logout)
 POST {{baseUrl}}/api/auth/out
-Authorization: Bearer {{accessToken}}
 Content-Type: application/json
 
 {
-    "refresh_token": "{{refreshToken}}"
+    "refresh_token": "{{newRefreshToken}}"
 }
 
-### 3.3 Выйти со ВСЕХ устройств (Убить все сессии)
+### 4.3 Экстренный выход со всех устройств (Logout All)
+# Используем токен, чтобы Охранник понял, КТО именно выходит
 POST {{baseUrl}}/api/auth/out_all
-Authorization: Bearer {{accessToken}}POST {{baseUrl}}/api/auth/register
-Content-Type: application/json
-
-{
-    "username": "AiStudent",
-    "email": "student_api@gmail.com",
-    "password": "SuperSecretPassword1!",
-    "c_password": "SuperSecretPassword1!",
-    "birthday": "2005-05-15"
-}
+Authorization: Bearer {{newAccessToken}}
