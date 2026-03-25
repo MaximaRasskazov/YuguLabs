@@ -15,7 +15,6 @@ func SetupDatabase() *gorm.DB {
 		log.Fatalf("Не удалось создать папку: %v", err)
 	}
 
-
 	dbPath := filepath.Join(dbDir, "app.db")
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
