@@ -14,6 +14,9 @@ type User struct {
 	Birthday  time.Time `gorm:"type:date;not null"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	// GORM сам поймет, что нужно использовать промежуточную таблицу role_user
+	Roles []Role `gorm:"many2many:role_user;"`
 }
 
 type TokenSession struct {
