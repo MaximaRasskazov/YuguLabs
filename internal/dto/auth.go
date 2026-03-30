@@ -20,6 +20,8 @@ type UserDTO struct {
 	Username string `json:"username"`
 	Email    string `json:"email"`
 	Birthday string `json:"birthday"`
+
+	Roles []RoleDTO `json:"roles,omitempty"`
 }
 
 type AuthSuccessDTO struct {
