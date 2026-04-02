@@ -26,7 +26,7 @@ var ValidatePassword validator.Func = func(fl validator.FieldLevel) bool {
 
 var ValidateAge14 validator.Func = func(fl validator.FieldLevel) bool {
 	birthdayStr := fl.Field().String()
-	
+
 	birthday, err := time.Parse("2006-01-02", birthdayStr)
 	if err != nil {
 		return false
@@ -35,4 +35,13 @@ var ValidateAge14 validator.Func = func(fl validator.FieldLevel) bool {
 	fourteenYearsAgo := time.Now().AddDate(-14, 0, 0)
 
 	return birthday.Before(fourteenYearsAgo) || birthday.Equal(fourteenYearsAgo)
+}
+
+// ValidateSlugFormat проверяет, что строка состоит только из a-z, A-Z, 0-9, - и _
+var ValidateSlugFormat validator.Func = func(fl validator.FieldLevel) bool {
+	slug := fl.Field().String()
+
+	// Регулярное выражение от начала ^ до конца $ строки
+	matched, _ := regexp.MatchString(`^[a-zA-Z0-9_-]+$`, slug)
+	return matched
 }
