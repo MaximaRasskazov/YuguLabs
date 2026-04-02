@@ -30,6 +30,7 @@ func main() {
 		v.RegisterValidation("alpha_capital", customValidator.ValidateUsername)
 		v.RegisterValidation("password_complex", customValidator.ValidatePassword)
 		v.RegisterValidation("age_14", customValidator.ValidateAge14)
+		v.RegisterValidation("slug_format", customValidator.ValidateSlugFormat)
 	}
 
 	infoSvc := service.NewInfoService(db)
@@ -39,7 +40,18 @@ func main() {
 	authSvc := service.NewAuthService(db, tokenSvc)
 	authCtrl := controller.NewAuthController(authSvc)
 
-	r := router.SetupRouter(infoCtrl, authCtrl)
+	roleSvc := service.NewRoleService(db)
+	roleCtrl := controller.NewRoleController(roleSvc)
+
+	userRoleSvc := service.NewUserRoleService(db)
+	userRoleCtrl := controller.NewUserRoleController(userRoleSvc)
+
+	permSvc := service.NewPermissionService(db)
+	permCtrl := controller.NewPermissionController(permSvc)
+
+	// Передаем db и новый контроллер в роутер
+	r := router.SetupRouter(db, infoCtrl, authCtrl, roleCtrl, userRoleCtrl, permCtrl)
+
 	// gin.SetMode(gin.ReleaseMode)
 
 	loc, _ := time.LoadLocation("Europe/Moscow")
