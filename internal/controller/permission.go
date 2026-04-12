@@ -24,7 +24,7 @@ func (ctrl *PermissionController) CreatePermission(c *gin.Context) {
 		return
 	}
 
-	userIDObj, _ := c.Get("userID")
+	userIDObj, _ := c.Get("user_id")
 	permDTO, err := ctrl.permService.CreatePermission(req, userIDObj.(uint))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -74,7 +74,7 @@ func (ctrl *PermissionController) HardDeletePermission(c *gin.Context) {
 
 func (ctrl *PermissionController) SoftDeletePermission(c *gin.Context) {
 	permID, err := strconv.ParseUint(c.Param("permission"), 10, 32)
-	userIDObj, _ := c.Get("userID")
+	userIDObj, _ := c.Get("user_id")
 	if err == nil && ctrl.permService.SoftDeletePermission(uint(permID), userIDObj.(uint)) == nil {
 		c.JSON(http.StatusOK, gin.H{"message": "Разрешение мягко удалено"})
 		return

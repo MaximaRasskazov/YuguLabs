@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"time"
 	"yugu-server/internal/dto"
 	"yugu-server/internal/repository"
 
@@ -24,7 +25,7 @@ func NewUserRoleService(db *gorm.DB) UserRoleService {
 	return &userRoleServiceImpl{db: db}
 }
 
-// AssignRole привязывает роль к пользователю
+// AssignRole привязывает роль к пользователю (С ЗАЩИТОЙ ОТ КЛОНОВ)
 func (s *userRoleServiceImpl) AssignRole(targetUserID uint, roleID uint, currentUserID uint) error {
 	// 1. Проверяем, существует ли пользователь и роль
 	var userCount, roleCount int64
@@ -38,17 +39,25 @@ func (s *userRoleServiceImpl) AssignRole(targetUserID uint, roleID uint, current
 		return errors.New("роль не найдена")
 	}
 
-	// 2. Проверяем, нет ли уже такой активной связи (защита от дубликатов)
-	var linkCount int64
-	s.db.Model(&repository.UserRole{}).
-		Where("user_id = ? AND role_id = ? AND deleted_at IS NULL", targetUserID, roleID).
-		Count(&linkCount)
+	// 2. Ищем связь ВЕЗДЕ (даже в корзине) через Unscoped
+	var existingLink repository.UserRole
+	err := s.db.Unscoped().Where("user_id = ? AND role_id = ?", targetUserID, roleID).First(&existingLink).Error
 
-	if linkCount > 0 {
-		return errors.New("пользователь уже имеет эту роль")
+	if err == nil {
+		// Связь уже существует! Проверяем, в корзине ли она.
+		if !existingLink.DeletedAt.Valid {
+			// Поля deleted_at нет -> роль активна
+			return errors.New("пользователь уже имеет эту активную роль")
+		}
+
+		// Роль в корзине! Не создаем дубликат, а просто ВОССТАНАВЛИВАЕМ её.
+		return s.db.Unscoped().Model(&existingLink).Updates(map[string]interface{}{
+			"deleted_at": nil,
+			"deleted_by": nil,
+		}).Error
 	}
 
-	// 3. Создаем связь с указанием, КТО её создал (требование ТЗ)
+	// 3. Если связи вообще никогда не было - создаем новую чистовиком
 	userRole := repository.UserRole{
 		UserID:      targetUserID,
 		RoleID:      roleID,
@@ -60,16 +69,27 @@ func (s *userRoleServiceImpl) AssignRole(targetUserID uint, roleID uint, current
 
 // GetUserRoles возвращает список активных ролей конкретного пользователя
 func (s *userRoleServiceImpl) GetUserRoles(targetUserID uint) ([]dto.RoleDTO, error) {
-	var user repository.User
-
-	// Используем Preload для автоматического JOIN'а промежуточной таблицы
-	err := s.db.Preload("Roles").First(&user, targetUserID).Error
-	if err != nil {
+	// 1. Сначала проверим, существует ли вообще такой юзер
+	var userCount int64
+	s.db.Model(&repository.User{}).Where("id = ?", targetUserID).Count(&userCount)
+	if userCount == 0 {
 		return nil, errors.New("пользователь не найден")
 	}
 
+	var roles []repository.Role
+
+	err := s.db.Table("roles").
+		Select("DISTINCT roles.*"). // <-- ВОТ ЭТА СТРОЧКА СПАСЕТ ОТ КЛОНОВ В ОТВЕТЕ
+		Joins("JOIN role_user ON role_user.role_id = roles.id").
+		Where("role_user.user_id = ? AND role_user.deleted_at IS NULL AND roles.deleted_at IS NULL", targetUserID).
+		Find(&roles).Error
+	if err != nil {
+		return nil, errors.New("ошибка при получении ролей")
+	}
+
+	// 3. Собираем DTO для ответа
 	var dtos []dto.RoleDTO
-	for _, r := range user.Roles {
+	for _, r := range roles {
 		var desc string
 		if r.Description != nil {
 			desc = *r.Description
@@ -87,36 +107,56 @@ func (s *userRoleServiceImpl) GetUserRoles(targetUserID uint) ([]dto.RoleDTO, er
 
 // HardRemoveRole - Жесткое удаление роли у пользователя (физически удаляет связь из БД)
 func (s *userRoleServiceImpl) HardRemoveRole(targetUserID uint, roleID uint) error {
-	// Unscoped() отключает защиту GORM и удаляет строку навсегда
-	return s.db.Unscoped().
+	result := s.db.Unscoped().
 		Where("user_id = ? AND role_id = ?", targetUserID, roleID).
-		Delete(&repository.UserRole{}).Error
-}
+		Delete(&repository.UserRole{})
 
-// SoftRemoveRole - Мягкое удаление (проставляет deleted_at и deleted_by)
-func (s *userRoleServiceImpl) SoftRemoveRole(targetUserID uint, roleID uint, currentUserID uint) error {
-	// Сначала записываем, КТО удалил эту связь
-	err := s.db.Model(&repository.UserRole{}).
-		Where("user_id = ? AND role_id = ?", targetUserID, roleID).
-		Update("deleted_by", currentUserID).Error
-	if err != nil {
-		return err
+	if result.Error != nil {
+		return result.Error
 	}
 
-	// Затем вызываем мягкое удаление (GORM сам поставит время в deleted_at)
-	return s.db.
-		Where("user_id = ? AND role_id = ?", targetUserID, roleID).
-		Delete(&repository.UserRole{}).Error
+	if result.RowsAffected == 0 {
+		return errors.New("связь не найдена (нечего удалять)")
+	}
+
+	return nil
+}
+
+func (s *userRoleServiceImpl) SoftRemoveRole(targetUserID uint, roleID uint, currentUserID uint) error {
+	result := s.db.Model(&repository.UserRole{}).
+		Where("user_id = ? AND role_id = ? AND deleted_at IS NULL", targetUserID, roleID).
+		Updates(map[string]interface{}{
+			"deleted_at": time.Now(),
+			"deleted_by": currentUserID,
+		})
+
+	if result.Error != nil {
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return errors.New("активная связь не найдена (возможно, уже удалена)")
+	}
+
+	return nil
 }
 
 // RestoreUserRole - Восстановление мягко удаленной связи
 func (s *userRoleServiceImpl) RestoreUserRole(targetUserID uint, roleID uint) error {
-	// Unscoped() нужен, чтобы найти даже "удаленную" запись
-	// Обнуляем поля deleted_at и deleted_by
-	return s.db.Unscoped().Model(&repository.UserRole{}).
+	result := s.db.Unscoped().Model(&repository.UserRole{}).
 		Where("user_id = ? AND role_id = ?", targetUserID, roleID).
 		Updates(map[string]interface{}{
 			"deleted_at": nil,
 			"deleted_by": nil,
-		}).Error
+		})
+
+	if result.Error != nil {
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return errors.New("связь не найдена или была удалена навсегда")
+	}
+
+	return nil
 }

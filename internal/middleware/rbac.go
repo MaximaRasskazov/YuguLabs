@@ -12,7 +12,7 @@ func RequirePermission(db *gorm.DB, requiredSlug string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 1. Достаем ID пользователя из контекста
 		// (Его туда должен был положить твой базовый AuthMiddleware проверки токена)
-		userIDObj, exists := c.Get("userID")
+		userIDObj, exists := c.Get("user_id")
 		if !exists {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Пользователь не авторизован"})
 			c.Abort()

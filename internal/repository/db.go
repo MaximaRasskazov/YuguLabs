@@ -81,19 +81,25 @@ func SeedDatabase(db *gorm.DB) {
 		}
 	}
 
-	// 4. Связываем роли и разрешения (RolePermissionSeeder)
+	// 4. Связываем роли и разрешения ВРУЧНУЮ, чтобы заполнить created_by
 	// Админу даем ВСЕ 18 разрешений
-	db.Model(&adminRole).Association("Permissions").Append(allPermissions)
+	for _, perm := range allPermissions {
+		db.Create(&RolePermission{RoleID: adminRole.ID, PermissionID: perm.ID, CreatedByID: systemUserID})
+	}
 
 	// Юзеру даем: get-list-user, read-user, update-user
 	var userPermissions []Permission
 	db.Where("slug IN ?", []string{"get-list-user", "read-user", "update-user"}).Find(&userPermissions)
-	db.Model(&userRole).Association("Permissions").Append(userPermissions)
+	for _, perm := range userPermissions {
+		db.Create(&RolePermission{RoleID: userRole.ID, PermissionID: perm.ID, CreatedByID: systemUserID})
+	}
 
 	// Гостю даем только get-list-user
 	var guestPermissions []Permission
 	db.Where("slug = ?", "get-list-user").Find(&guestPermissions)
-	db.Model(&guestRole).Association("Permissions").Append(guestPermissions)
+	for _, perm := range guestPermissions {
+		db.Create(&RolePermission{RoleID: guestRole.ID, PermissionID: perm.ID, CreatedByID: systemUserID})
+	}
 
 	log.Println("✅ Сиды успешно отработали!")
 }

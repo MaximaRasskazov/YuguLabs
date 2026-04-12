@@ -28,7 +28,7 @@ func (ctrl *RoleController) CreateRole(c *gin.Context) {
 	}
 
 	// 2. Достаем ID текущего пользователя (он 100% есть, т.к. маршрут защищен AuthMiddleware)
-	userIDObj, _ := c.Get("userID")
+	userIDObj, _ := c.Get("user_id")
 	userID := userIDObj.(uint)
 
 	// 3. Передаем в сервис
@@ -58,7 +58,7 @@ func (ctrl *RoleController) SoftDeleteRole(c *gin.Context) {
 	roleIDStr := c.Param("role")
 	roleID, _ := strconv.ParseUint(roleIDStr, 10, 32)
 
-	currentUserIDObj, _ := c.Get("userID")
+	currentUserIDObj, _ := c.Get("user_id")
 	currentUserID := currentUserIDObj.(uint)
 
 	if err := ctrl.roleService.SoftDeleteRole(uint(roleID), currentUserID); err != nil {
@@ -72,13 +72,28 @@ func (ctrl *RoleController) SoftDeleteRole(c *gin.Context) {
 // RestoreRole - POST /api/ref/policy/role/{role}/restore
 func (ctrl *RoleController) RestoreRole(c *gin.Context) {
 	roleIDStr := c.Param("role")
-	roleID, _ := strconv.ParseUint(roleIDStr, 10, 32)
 
-	if err := ctrl.roleService.RestoreRole(uint(roleID)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка при восстановлении роли"})
+	// БОНУС: Добавлена проверка на то, что ID - это число (чтобы /role/abc/restore выдавал 400)
+	roleID, err := strconv.ParseUint(roleIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный формат ID роли"})
 		return
 	}
 
+	// Вызываем сервис
+	if err := ctrl.roleService.RestoreRole(uint(roleID)); err != nil {
+		// Ловим нашу кастомную ошибку "фантомного восстановления"
+		if err.Error() == "роль не найдена или была удалена навсегда" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Если упала сама база данных (ошибка синтаксиса, обрыв связи)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Внутренняя ошибка сервера: " + err.Error()})
+		return
+	}
+
+	// Если ошибок нет - отдаем заветный 200 OK
 	c.JSON(http.StatusOK, gin.H{"message": "Роль успешно восстановлена"})
 }
 
@@ -120,4 +135,25 @@ func (ctrl *RoleController) UpdateRole(c *gin.Context) {
 
 	// 4. Возвращаем обновленный объект
 	c.JSON(http.StatusOK, updatedRole)
+}
+
+func (ctrl *RoleController) AssignPermission(c *gin.Context) {
+	roleIDStr := c.Param("role")
+	roleID, _ := strconv.ParseUint(roleIDStr, 10, 32)
+
+	var input struct {
+		PermissionID uint `json:"permission_id" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(400, gin.H{"error": "Неверный формат данных"})
+		return
+	}
+
+	if err := ctrl.roleService.AssignPermissionToRole(uint(roleID), input.PermissionID); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(200, gin.H{"message": "Разрешение успешно добавлено роли"})
 }

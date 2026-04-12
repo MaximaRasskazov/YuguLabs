@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"time"
 	"yugu-server/internal/dto"
 	"yugu-server/internal/repository"
 
@@ -17,6 +18,7 @@ type RoleService interface {
 	HardDeleteRole(roleID uint) error
 
 	UpdateRole(roleID uint, req dto.UpdateRoleRequest) (dto.RoleDTO, error)
+	AssignPermissionToRole(roleID uint, permID uint) error
 }
 
 type roleServiceImpl struct {
@@ -96,12 +98,21 @@ func (s *roleServiceImpl) SoftDeleteRole(roleID uint, currentUserID uint) error 
 	return s.db.Delete(&repository.Role{}, roleID).Error
 }
 
-// RestoreRole восстанавливает мягко удаленную роль
 func (s *roleServiceImpl) RestoreRole(roleID uint) error {
-	return s.db.Unscoped().Model(&repository.Role{}).Where("id = ?", roleID).Updates(map[string]interface{}{
+	result := s.db.Unscoped().Model(&repository.Role{}).Where("id = ?", roleID).Updates(map[string]interface{}{
 		"deleted_at": nil,
 		"deleted_by": nil,
-	}).Error
+	})
+
+	if result.Error != nil {
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return errors.New("роль не найдена или была удалена навсегда")
+	}
+
+	return nil
 }
 
 // HardDeleteRole физически удаляет запись из БД
@@ -155,4 +166,14 @@ func (s *roleServiceImpl) UpdateRole(roleID uint, req dto.UpdateRoleRequest) (dt
 		Slug:        role.Slug,
 		Description: desc,
 	}, nil
+}
+
+func (s *roleServiceImpl) AssignPermissionToRole(roleID uint, permID uint) error {
+	// Оставили только те поля, которые реально существуют в таблице permission_role
+	return s.db.Table("permission_role").Create(map[string]interface{}{
+		"role_id":       roleID,
+		"permission_id": permID,
+		"created_by":    1, // ID админа для лабы
+		"created_at":    time.Now(),
+	}).Error
 }
