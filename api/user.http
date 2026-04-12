@@ -1,0 +1,59 @@
+# @baseUrl = http://127.0.0.1:8000
+@baseUrl = http://localhost:8000
+### 1. Логин обычного пользователя (Авто-сохранение токена)
+# @name loginUser
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+User-Agent: User.http
+
+{
+    "username": "JustUser",
+    "password": "Password_1!"
+}
+
+@userToken = {{loginUser.response.body.access_token}}
+
+
+
+
+
+
+### ЧТО МОЖЕТ ОБЫЧНЫЙ ЮЗЕР (Ожидаем 200 OK)
+
+### 2. Посмотреть свой профиль
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{userToken}}
+
+### 3. Посмотреть свои активные сессии
+GET {{baseUrl}}/api/auth/tokens
+Authorization: Bearer {{userToken}}
+
+
+
+
+
+
+### ЧТО НЕ МОЖЕТ ОБЫЧНЫЙ ЮЗЕР (Ожидаем 403 Forbidden)
+
+### 4. [ОТКАЗ] Попытка посмотреть список всех ролей системы
+GET {{baseUrl}}/api/ref/policy/role
+Authorization: Bearer {{userToken}}
+
+### 5. [ОТКАЗ] Попытка создать новую роль
+POST {{baseUrl}}/api/ref/policy/role
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+    "name": "Хакер",
+    "slug": "hacker",
+    "description": "Пытаюсь взломать систему"
+}
+
+### 6. [ОТКАЗ] Попытка удалить чужую роль
+DELETE {{baseUrl}}/api/ref/policy/role/1
+Authorization: Bearer {{userToken}}
+
+### 7. [ОТКАЗ] Попытка посмотреть список всех разрешений (Permissions)
+GET {{baseUrl}}/api/ref/policy/permission
+Authorization: Bearer {{userToken}}
