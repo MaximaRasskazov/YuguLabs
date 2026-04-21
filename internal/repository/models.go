@@ -58,10 +58,10 @@ type Permission struct {
 
 type UserRole struct {
 	ID          uint           `gorm:"primaryKey"`
-	UserID      uint           `gorm:"not null;index"`
-	RoleID      uint           `gorm:"not null;index"`
+	UserID      uint           `gorm:"not null;uniqueIndex:idx_user_role"`
+	RoleID      uint           `gorm:"not null;uniqueIndex:idx_user_role"`
+	CreatedByID uint           `gorm:"not null"`
 	CreatedAt   time.Time      `gorm:"not null"`
-	CreatedByID uint           `gorm:"column:created_by;not null"`
 	DeletedAt   gorm.DeletedAt `gorm:"index;column:deleted_at"`
 	DeletedByID *uint          `gorm:"column:deleted_by"`
 }

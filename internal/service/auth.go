@@ -63,6 +63,13 @@ func (s *authServiceImpl) Register(req dto.RegisterRequest) (dto.UserDTO, error)
 		return dto.UserDTO{}, errors.New("Ошибка при создании пользователя")
 	}
 
+	userRole := repository.UserRole{
+		UserID:      user.ID,
+		RoleID:      2,
+		CreatedByID: user.ID,
+	}
+	s.db.Create(&userRole)
+
 	return dto.UserDTO{
 		ID:       user.ID,
 		Username: user.Username,

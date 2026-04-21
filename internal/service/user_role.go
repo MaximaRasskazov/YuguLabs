@@ -15,6 +15,8 @@ type UserRoleService interface {
 	HardRemoveRole(targetUserID uint, roleID uint) error
 	SoftRemoveRole(targetUserID uint, roleID uint, currentUserID uint) error
 	RestoreUserRole(targetUserID uint, roleID uint) error
+	AssignRoles(targetUserID uint, roleIDs []uint, currentUserID uint) error
+	GetUserPermissions(userID uint) ([]repository.Permission, error)
 }
 
 type userRoleServiceImpl struct {
@@ -159,4 +161,39 @@ func (s *userRoleServiceImpl) RestoreUserRole(targetUserID uint, roleID uint) er
 	}
 
 	return nil
+}
+
+// 1. Логика массовой выдачи ролей
+func (s *userRoleServiceImpl) AssignRoles(targetUserID uint, roleIDs []uint, currentUserID uint) error {
+	// Открываем транзакцию (чтобы сделать всё разом и безопасно)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		for _, roleID := range roleIDs {
+			link := repository.UserRole{
+				UserID:      targetUserID,
+				RoleID:      roleID,
+				CreatedByID: currentUserID,
+			}
+
+			// FirstOrCreate защищает нас от выдачи дубликатов (как просил преподаватель)
+			if err := tx.Where(repository.UserRole{UserID: targetUserID, RoleID: roleID}).
+				FirstOrCreate(&link).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// 2. Логика получения всех уникальных разрешений юзера
+func (s *userRoleServiceImpl) GetUserPermissions(userID uint) ([]repository.Permission, error) {
+	var permissions []repository.Permission
+
+	err := s.db.Table("permissions").
+		Select("DISTINCT permissions.*").
+		Joins("INNER JOIN permission_role ON permissions.id = permission_role.permission_id").
+		Joins("INNER JOIN role_user ON permission_role.role_id = role_user.role_id").
+		Where("role_user.user_id = ? AND role_user.deleted_at IS NULL", userID).
+		Find(&permissions).Error
+
+	return permissions, err
 }

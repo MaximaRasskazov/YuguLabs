@@ -50,6 +50,8 @@ func SetupRouter(db *gorm.DB, infoCtrl *controller.InfoController, authCtrl *con
 			auth.GET("/tokens", middleware.AuthRequired(), authCtrl.GetTokens)
 			auth.POST("/out_all", middleware.AuthRequired(), authCtrl.LogoutAll)
 			auth.POST("/out", middleware.AuthRequired(), authCtrl.Logout)
+			auth.GET("/me/permissions", middleware.AuthRequired(), userRoleCtrl.GetMyPermissions)
+			auth.GET("/me/roles", middleware.AuthRequired(), userRoleCtrl.GetMyRoles)
 		}
 
 		// Блок RBAC (ролевая система)

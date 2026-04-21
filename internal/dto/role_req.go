@@ -23,5 +23,23 @@ type StorePermissionRequest struct {
 
 // AttachUserRoleRequest — валидация при привязке роли к пользователю
 type AttachUserRoleRequest struct {
-	RoleID uint `json:"role_id" binding:"required,gt=0"` // Должно быть больше нуля
+	// 1. Меняем RoleID на RoleIDs (тип []uint - срез/массив чисел)
+	// 2. В binding добавляем min=1 (чтобы массив не был пустым)
+	// 3. dive,gt=0 заставит валидатор "нырнуть" в массив и проверить,
+	// что каждый ID внутри больше нуля.
+	RoleIDs []uint `json:"role_ids" binding:"required,min=1,dive,gt=0"`
+}
+
+// Структура того, что мы отдаем юзеру
+type UserPermissionResponse struct {
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
+}
+
+// То, что увидит пользователь при запросе своих ролей
+type UserRoleResponse struct {
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
 }
