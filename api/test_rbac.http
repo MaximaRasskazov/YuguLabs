@@ -1,0 +1,107 @@
+@baseUrl = http://localhost:8000
+
+### ==========================================
+### 1. РЕГИСТРАЦИЯ И НАСТРОЙКА АДМИНА
+### ==========================================
+
+### 1.1 Регистрируем Админа (Он будет UserID = 1)
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+    "username": "AdminMaster",
+    "email": "admin@yugu.ru",
+    "password": "Password_1!",
+    "c_password": "Password_1!",
+    "birthday": "1990-01-01"
+}
+
+### 1.2 Активируем Чит-код (Делаем UserID=1 Админом)
+GET {{baseUrl}}/info/make-me-admin
+
+### 1.3 Логинимся Админом, чтобы получить Токен
+# @name loginAdmin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+    "username": "AdminMaster",
+    "password": "Password_1!"
+}
+@adminToken = {{loginAdmin.response.body.access_token}}
+
+
+### ==========================================
+### 2. РЕГИСТРАЦИЯ И НАСТРОЙКА ПОДОПЫТНОГО
+### ==========================================
+
+### 2.1 Регистрируем Обычного Юзера (Он будет UserID = 2)
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+    "username": "TestUser",
+    "email": "test@yugu.ru",
+    "password": "Password_1!",
+    "c_password": "Password_1!",
+    "birthday": "2000-01-01"
+}
+
+### 2.2 Логинимся Тестовым Юзером
+# @name loginTest
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+    "username": "TestUser",
+    "password": "Password_1!"
+}
+@testToken = {{loginTest.response.body.access_token}}
+
+### 2.3 Админ выдает Юзеру Роль "User" (По базе это RoleID = 2)
+POST {{baseUrl}}/api/ref/user/2/role
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+    "role_ids": [2]
+}
+
+### 2.4 Админ привязывает право "get-list-role" (PermissionID = 7) к Роли "User" (RoleID = 2)
+POST {{baseUrl}}/api/ref/policy/role/2/permission
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+    "permission_id": 7
+}
+
+
+### ==========================================
+### 3. ФИНАЛЬНАЯ ПРОВЕРКА БЕЗОПАСНОСТИ
+### ==========================================
+
+### ТЕСТ 1: Успешный доступ (Связи активны) -> ЖДЕМ 200 OK
+GET {{baseUrl}}/api/ref/policy/role
+Authorization: Bearer {{testToken}}
+
+### ТЕСТ 2: Админ забирает право (Мягкое удаление из permission_role)
+DELETE {{baseUrl}}/api/ref/policy/role/2/permission/7
+Authorization: Bearer {{adminToken}}
+
+### ТЕСТ 3: Юзер пытается зайти -> ЖДЕМ 403 Forbidden
+GET {{baseUrl}}/api/ref/policy/role
+Authorization: Bearer {{testToken}}
+
+### ТЕСТ 4: Админ возвращает право (Восстановление)
+POST {{baseUrl}}/api/ref/policy/role/2/permission
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+    "permission_id": 7
+}
+
+### ТЕСТ 5: Юзер снова заходит -> ЖДЕМ 200 OK
+GET {{baseUrl}}/api/ref/policy/role
+Authorization: Bearer {{testToken}}

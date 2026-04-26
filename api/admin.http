@@ -1,0 +1,152 @@
+@baseUrl = http://localhost:8000
+//@baseUrl = http://127.0.0.1:8000
+
+### БЛОК 1: ПОДГОТОВКА АДМИНА
+### 1.1 Регистрация Первого юзера (Админа)
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+    "username": "AdminMaster",
+    "email": "admin@yugu.ru",
+    "password": "Password_1!",
+    "c_password": "Password_1!",
+    "birthday": "1995-05-15"
+}
+
+### 1.2 Делаем его админом (Чит-код для лабы)
+GET {{baseUrl}}/info/make-me-admin
+
+### 1.3 Логин Админа (Сохраняем токен)
+# @name loginAdmin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+    "username": "AdminMaster",
+    "password": "Password_1!"
+}
+
+@adminToken = {{loginAdmin.response.body.access_token}}
+
+
+
+
+
+### БЛОК 2: УПРАВЛЕНИЕ РОЛЯМИ (CRUD)
+### 2.1 Смотреть все роли
+GET {{baseUrl}}/api/ref/policy/role
+Authorization: Bearer {{adminToken}}
+
+### 2.2 Создать роль "Модератор" (Получит ID = 4)
+POST {{baseUrl}}/api/ref/policy/role
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+    "name": "Модератор",
+    "slug": "moderator",
+    "description": "Может банить"
+}
+
+### 2.3 Изменить роль
+PUT {{baseUrl}}/api/ref/policy/role/4
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+    "name": "Старший Модератор",
+    "slug": "senior_moderator"
+}
+
+### 2.4 Мягкое удаление роли (Отправка в корзину)
+DELETE {{baseUrl}}/api/ref/policy/role/4/soft
+Authorization: Bearer {{adminToken}}
+
+### 2.5 Восстановление мягко удаленной роли (Достаем из корзины)
+POST {{baseUrl}}/api/ref/policy/role/4/restore
+Authorization: Bearer {{adminToken}}
+
+### 2.6 Жесткое удаление роли (Удаляем из БД навсегда)
+DELETE {{baseUrl}}/api/ref/policy/role/4
+Authorization: Bearer {{adminToken}}
+
+
+
+### БЛОК 3: УПРАВЛЕНИЕ РАЗРЕШЕНИЯМИ (CRUD)
+### 3.1 Посмотреть ВСЕ разрешения, которые есть в системе
+GET {{baseUrl}}/api/ref/policy/permission
+Authorization: Bearer {{adminToken}}
+
+### 3.2 Создать новое разрешение
+POST {{baseUrl}}/api/ref/policy/permission
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+    "name": "Удалить комментарий",
+    "slug": "delete-comment"
+}
+
+### 3.3 Привязать разрешение (ID=7) к роли (ID=4)
+POST {{baseUrl}}/api/ref/policy/role/4/permission
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+    "permission_id": 7
+}
+
+### 3.4 Посмотреть, какие разрешения лежат в роли (ID=4)
+GET {{baseUrl}}/api/ref/policy/role/4/permission
+Authorization: Bearer {{adminToken}}
+
+### 3.5 Забрать разрешение (ID=7) у роли (ID=4)
+DELETE {{baseUrl}}/api/ref/policy/role/4/permission/7
+Authorization: Bearer {{adminToken}}
+
+
+
+
+
+### БЛОК 4: УПРАВЛЕНИЕ ЧУЖИМИ ПРОФИЛЯМИ (Пользователь ID=2)
+### 4.1 [ДО] Посмотреть текущие РОЛИ пользователя 2 (Должно быть пусто)
+GET {{baseUrl}}/api/ref/user/2/role
+Authorization: Bearer {{adminToken}}
+
+### 4.2 [ДО] Посмотреть текущие РАЗРЕШЕНИЯ пользователя 2 (Должно быть пусто)
+GET {{baseUrl}}/api/ref/user/2/permission
+Authorization: Bearer {{adminToken}}
+
+### 4.3 ДЕЙСТВИЕ: Массовая выдача ролей пользователю
+POST {{baseUrl}}/api/ref/user/2/role
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+    "role_ids": [4, 5]
+}
+
+### 4.4 [ПОСЛЕ] Проверяем РОЛИ пользователя 2 (Должны появиться роли 4 и 5)
+GET {{baseUrl}}/api/ref/user/2/role
+Authorization: Bearer {{adminToken}}
+
+### 4.5 [ПОСЛЕ] Проверяем РАЗРЕШЕНИЯ пользователя 2 (Должны подтянуться все права от этих ролей)
+GET {{baseUrl}}/api/ref/user/2/permission
+Authorization: Bearer {{adminToken}}
+
+### 4.6 ДЕЙСТВИЕ: Мягко забрать роль (ID=4) у пользователя (Увольняем с должности)
+DELETE {{baseUrl}}/api/ref/user/2/role/4/soft
+Authorization: Bearer {{adminToken}}
+
+### 4.7 [ПОСЛЕ УВОЛЬНЕНИЯ] Проверяем РАЗРЕШЕНИЯ (Права, привязанные к роли 4, должны исчезнуть!)
+GET {{baseUrl}}/api/ref/user/2/permission
+Authorization: Bearer {{adminToken}}
+
+### 4.8 ДЕЙСТВИЕ: Восстановить роль (ID=4) пользователю
+POST {{baseUrl}}/api/ref/user/2/role/4/restore
+Authorization: Bearer {{adminToken}}
+
+### 4.9 ДЕЙСТВИЕ: Жестко забрать роль (ID=4) у пользователя (Удалить связь навсегда)
+DELETE {{baseUrl}}/api/ref/user/2/role/4
+Authorization: Bearer {{adminToken}}

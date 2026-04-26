@@ -1,0 +1,38 @@
+@baseUrl = http://localhost:8000
+//@baseUrl = http://127.0.0.1:8000
+
+### 1. Регистрация Обычного юзера (Получит ID = 2)
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+    "username": "JustUser",
+    "email": "user@yugu.ru",
+    "password": "Password_1!",
+    "c_password": "Password_1!",
+    "birthday": "2000-01-01"
+}
+
+### 2. Логин Юзера
+# @name loginUser
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+    "username": "JustUser",
+    "password": "Password_1!"
+}
+
+@userToken = {{loginUser.response.body.access_token}}
+
+### 3. Просмотр СВОИХ ролей (Должность)
+GET {{baseUrl}}/api/auth/me/roles
+Authorization: Bearer {{userToken}}
+
+### 4. Просмотр СВОИХ разрешений (Конкретные права)
+GET {{baseUrl}}/api/auth/me/permissions
+Authorization: Bearer {{userToken}}
+
+### 5. [ОТКАЗ 403] Попытка посмотреть системные роли
+GET {{baseUrl}}/api/ref/policy/role
+Authorization: Bearer {{userToken}}
