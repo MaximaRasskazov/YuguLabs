@@ -157,3 +157,32 @@ func (ctrl *RoleController) AssignPermission(c *gin.Context) {
 
 	c.JSON(200, gin.H{"message": "Разрешение успешно добавлено роли"})
 }
+
+// GetRolePermissions - GET /api/ref/policy/role/{role}/permission
+func (ctrl *RoleController) GetRolePermissions(c *gin.Context) {
+	roleIDStr := c.Param("role")
+	roleID, err := strconv.ParseUint(roleIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID роли"})
+		return
+	}
+
+	permissions, err := ctrl.roleService.GetPermissionsByRoleID(uint(roleID))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка при получении разрешений роли"})
+		return
+	}
+
+	var response []dto.PermissionAdminResponse
+	for _, p := range permissions {
+		response = append(response, dto.PermissionAdminResponse{
+			ID:          p.ID,
+			Name:        p.Name,
+			Slug:        p.Slug,
+			CreatedByID: p.CreatedByID,
+			DeletedByID: p.DeletedByID,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
+}

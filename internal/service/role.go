@@ -19,6 +19,7 @@ type RoleService interface {
 
 	UpdateRole(roleID uint, req dto.UpdateRoleRequest) (dto.RoleDTO, error)
 	AssignPermissionToRole(roleID uint, permID uint) error
+	GetPermissionsByRoleID(roleID uint) ([]repository.Permission, error)
 }
 
 type roleServiceImpl struct {
@@ -176,4 +177,15 @@ func (s *roleServiceImpl) AssignPermissionToRole(roleID uint, permID uint) error
 		"created_by":    1, // ID админа для лабы
 		"created_at":    time.Now(),
 	}).Error
+}
+
+func (s *roleServiceImpl) GetPermissionsByRoleID(roleID uint) ([]repository.Permission, error) {
+	var permissions []repository.Permission
+
+	err := s.db.Table("permissions").
+		Joins("INNER JOIN permission_role ON permissions.id = permission_role.permission_id").
+		Where("permission_role.role_id = ?", roleID).
+		Find(&permissions).Error
+
+	return permissions, err
 }

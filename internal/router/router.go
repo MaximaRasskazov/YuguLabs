@@ -69,6 +69,7 @@ func SetupRouter(db *gorm.DB, infoCtrl *controller.InfoController, authCtrl *con
 			roleGroup.PUT("/:role", middleware.RequirePermission(db, "update-role"), roleCtrl.UpdateRole)
 			roleGroup.PATCH("/:role", middleware.RequirePermission(db, "update-role"), roleCtrl.UpdateRole)
 			roleGroup.POST("/:role/permission", roleCtrl.AssignPermission)
+			roleGroup.GET("/:role/permission", roleCtrl.GetRolePermissions)
 		}
 
 		userGroup := ref.Group("/user")

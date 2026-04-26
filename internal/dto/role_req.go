@@ -43,3 +43,12 @@ type UserRoleResponse struct {
 	Slug        string `json:"slug"`
 	Description string `json:"description"`
 }
+
+// Структура для чистого вывода разрешений (например, для админа)
+type PermissionAdminResponse struct {
+	ID          uint   `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	CreatedByID uint   `json:"created_by_id"`
+	DeletedByID *uint  `json:"deleted_by_id"` // Оставляем указатель, так как он может быть null
+}
