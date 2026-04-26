@@ -2,5 +2,5 @@
 .env
 database/
 *.db
-
+.test
 
