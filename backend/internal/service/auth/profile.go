@@ -21,6 +21,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 )
 
 // UpdateProfileInput — поля, которые можно поменять через PATCH /api/me.
@@ -70,11 +71,31 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, in Update
 		params.Birthday = pgtype.Date{Time: *in.Birthday, Valid: true}
 	}
 
-	if _, err := s.store.UpdateUserProfile(ctx, params); err != nil {
-		if repo.IsNotFound(err) {
-			return nil, ErrUserNotFound
+	// Апдейт + запись в change_logs одной транзакцией: сначала читаем
+	// текущее состояние (before), затем обновляем (after) и логируем —
+	// чтобы история и профиль не разъехались при сбое.
+	err := s.store.RunInTx(ctx, func(q *queries.Queries) error {
+		before, err := q.GetUserByID(ctx, pgutil.PgUUID(userID))
+		if err != nil {
+			if repo.IsNotFound(err) {
+				return ErrUserNotFound
+			}
+			return fmt.Errorf("get user: %w", err)
 		}
-		return nil, fmt.Errorf("update profile: %w", err)
+		updated, err := q.UpdateUserProfile(ctx, params)
+		if err != nil {
+			return fmt.Errorf("update profile: %w", err)
+		}
+		if s.changelog != nil {
+			if err := s.changelog.LogUpdatedTx(ctx, q, changelog.EntityUser, userID.String(),
+				changelog.UserSnapshot(before), changelog.UserSnapshot(updated), userID); err != nil {
+				return fmt.Errorf("changelog updated: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	// Возвращаем свежий Profile целиком — фронт сразу обновляет UI без
@@ -136,6 +157,13 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current,
 		// который тоже упадёт по логике replay-detection).
 		if err := q.RevokeAllAccessTokensForUser(ctx, user.ID); err != nil {
 			return fmt.Errorf("revoke tokens: %w", err)
+		}
+		if s.changelog != nil {
+			// Фиксируем сам факт смены пароля (без хеша) в истории.
+			if err := s.changelog.LogCustomTx(ctx, q, changelog.EntityUser, userID.String(),
+				changelog.ActionPasswordChanged, nil, nil, userID); err != nil {
+				return fmt.Errorf("changelog password: %w", err)
+			}
 		}
 		return nil
 	})

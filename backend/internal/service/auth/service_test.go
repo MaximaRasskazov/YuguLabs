@@ -13,7 +13,9 @@ import (
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 )
 
@@ -189,4 +191,25 @@ func TestAuth_EndToEnd_RegisterLoginRefreshLogout(t *testing.T) {
 	require.NoError(t, svc.Logout(ctx, rotated.AccessTokenID))
 	_, _, err = tokens.Validate(ctx, rotated.AccessToken)
 	require.ErrorIs(t, err, token.ErrTokenRevoked)
+}
+
+// TestAuth_Register_LogsUserCreated проверяет проводку changelog: при
+// регистрации в change_logs появляется запись created для сущности user.
+func TestAuth_Register_LogsUserCreated(t *testing.T) {
+	store, svc := testServices(t)
+	svc.SetChangelog(changelog.New(store))
+
+	reg, err := svc.Register(context.Background(), uniqueRegisterInput("clog"), "")
+	require.NoError(t, err)
+	cleanupUser(t, store, reg.User.ID)
+
+	rows, err := store.ListChangeLogsForEntity(context.Background(), queries.ListChangeLogsForEntityParams{
+		EntityType: changelog.EntityUser,
+		EntityID:   pgutil.UUID(reg.User.ID).String(),
+		Limit:      10,
+		Offset:     0,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, rows, "регистрация должна писать change_logs")
+	require.Equal(t, changelog.ActionCreated, rows[0].Action)
 }

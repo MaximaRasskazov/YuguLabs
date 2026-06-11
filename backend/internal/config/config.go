@@ -58,6 +58,15 @@ type Config struct {
 	EmulatorURL    string
 	EmulatorAPIKey string
 	SyncInterval   time.Duration
+
+	// Git-webhook авто-деплоя (лаба №6). Пустой GitWebhookSecret держит
+	// эндпоинт /api/hooks/git выключенным (отвечает 503): без секрета
+	// открытый деплой-хук — дыра в безопасности.
+	GitWebhookSecret string
+	GitDefaultBranch string
+	GitRepoPath      string
+	GitDeployLog     string
+	GitDeployTimeout time.Duration
 }
 
 // Load читает .env (если есть) и собирает Config из ENV.
@@ -107,6 +116,12 @@ func Load() (*Config, error) {
 		EmulatorURL:    getEnv("EMULATOR_URL", ""),
 		EmulatorAPIKey: getEnv("EMULATOR_API_KEY", ""),
 		SyncInterval:   parseDurationOrDefault("SYNC_INTERVAL", 5*time.Minute),
+
+		GitWebhookSecret: getEnv("GIT_WEBHOOK_SECRET", ""),
+		GitDefaultBranch: getEnv("GIT_DEFAULT_BRANCH", "main"),
+		GitRepoPath:      getEnv("GIT_REPO_PATH", "."),
+		GitDeployLog:     getEnv("GIT_DEPLOY_LOG", "storage/logs/deployment.log"),
+		GitDeployTimeout: parseDurationOrDefault("GIT_DEPLOY_TIMEOUT", 5*time.Minute),
 	}
 
 	if cfg.DBName == "" || cfg.DBUser == "" {

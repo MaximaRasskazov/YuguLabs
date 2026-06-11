@@ -105,17 +105,14 @@ async function changeRole(user, newRole) {
   const prevRole = user.role
   savingId.value = user.id
   toast.value = null
-  // Атомарной замены роли на бэке нет, поэтому сначала ВЫДАЁМ новую роль
-  // (POST), и только при успехе снимаем старую (DELETE). Так пользователь
-  // никогда не остаётся без роли. assigned помечает, что выдача прошла —
-  // тогда визуальный откат на prevRole был бы ложным.
-  let assigned = false
+  // Смена роли — ОДИН атомарный запрос: бэк в одной транзакции снимает старую
+  // роль и выдаёт новую (POST /roles/change). Промежуточного состояния
+  // «обе роли» нет; при ошибке на сервере не меняется ничего.
   try {
-    await http.post(`/api/users/${user.id}/roles`, { role_slug: newRole.toLowerCase() })
-    assigned = true
-    if (prevRole && prevRole !== newRole) {
-      await http.delete(`/api/users/${user.id}/roles/${prevRole.toLowerCase()}`)
-    }
+    await http.post(`/api/users/${user.id}/roles/change`, {
+      from_slug: prevRole ? prevRole.toLowerCase() : '',
+      to_slug: newRole.toLowerCase(),
+    })
     user.role = newRole
     showToast('ok', `Роль изменена: ${fullName(user)} → ${ROLE_LABEL[newRole]}`)
   } catch (e) {
@@ -124,10 +121,7 @@ async function changeRole(user, newRole) {
       ? 'Нельзя выдать роль выше своего уровня'
       : e.response?.data?.message || 'Не удалось изменить роль'
     showToast('err', msg)
-    // Если новую роль уже выдали, а снять старую не удалось — синхронизируем
-    // карточку с сервером, чтобы показать реальное состояние.
-    if (assigned) { user.role = newRole; fetchUsers() }
-    else { user.role = prevRole }
+    user.role = prevRole // ничего не применилось — возвращаем карточку
   } finally {
     savingId.value = null
   }
@@ -192,6 +186,144 @@ function avatarBg(u) {
 function initials(u) {
   return ((u.lastName?.[0] ?? '') + (u.firstName?.[0] ?? '')).toUpperCase()
 }
+
+/* ─── История изменений (audit) ──────────────────────────────── */
+const ACTION_LABEL = {
+  created:           'Создан',
+  updated:           'Профиль изменён',
+  role_assigned:     'Выдана роль',
+  role_revoked:      'Снята роль',
+  role_changed:      'Роль изменена',
+  password_changed:  'Сменён пароль',
+  restored_from_log: 'Откат из истории',
+  soft_deleted:      'Удалён',
+  restored:          'Восстановлен',
+}
+const FIELD_LABEL = {
+  first_name: 'Имя', last_name: 'Фамилия', middle_name: 'Отчество',
+  group_name: 'Группа', birthday: 'Дата рождения', email: 'Почта',
+}
+// Действия, для которых бэкенд умеет откат (см. changelog.RestoreFromLog).
+const RESTORABLE = new Set(['updated', 'role_assigned', 'role_revoked', 'role_changed'])
+
+const historyUser    = ref(null) // пользователь, чья история открыта (null = модалка закрыта)
+const historyEntries = ref([])
+const historyLoading = ref(false)
+const restoringId    = ref(null)
+// id записей, чей откат уже выполнен в этой сессии — их кнопка становится
+// серым бейджем «Откат выполнен» (повторный откат той же записи — no-op).
+const restoredIds    = ref(new Set())
+
+async function openHistory(u) {
+  historyUser.value = u
+  historyEntries.value = []
+  historyLoading.value = true
+  try {
+    const { data } = await http.get(`/api/users/${u.id}/story`, { params: { limit: 100 } })
+    historyEntries.value = (Array.isArray(data) ? data : []).map(describeEntry)
+  } catch (e) {
+    showToast('err', e.response?.status === 403 ? 'Нет права на просмотр истории' : 'Не удалось загрузить историю')
+    historyUser.value = null
+  } finally {
+    historyLoading.value = false
+  }
+}
+function closeHistory() { historyUser.value = null; historyEntries.value = [] }
+
+// describeEntry превращает запись лога в человекочитаемый вид:
+//   title   — действие, для ролей сразу с названием («Выдана роль «Деканат»»);
+//   details — только понятные поля профиля (old→new), без технических ключей;
+//   subject — ФИО затронутого пользователя (в журнале).
+function describeEntry(e) {
+  const cf = e.changed_fields || {}
+  let title = ACTION_LABEL[e.action] ?? e.action
+  // Название роли, если запись про роль (в т.ч. в записи отката).
+  const roleRef = cf.role_name ?? cf.role_slug ?? {}
+  const roleName = roleRef.new ?? roleRef.old
+  if (e.action === 'role_assigned' || e.action === 'role_revoked') {
+    if (roleName) title += ` «${roleName}»`
+  } else if (e.action === 'role_changed') {
+    // Смена роли: before→after. Если прежней роли не было — просто «выдана».
+    title = roleRef.old
+      ? `Роль изменена: «${roleRef.old}» → «${roleRef.new}»`
+      : `Выдана роль «${roleRef.new}»`
+  } else if (e.action === 'restored_from_log') {
+    // Поясняем, ЧТО именно откатили: роль или профиль.
+    title = roleName ? `Откат: роль «${roleName}»` : 'Откат изменения профиля'
+  }
+  // Подробности — для правки профиля и отката профиля: только понятные поля
+  // (технические ключи и UUID просто отсутствуют в FIELD_LABEL).
+  const details = (e.action === 'updated' || e.action === 'restored_from_log')
+    ? Object.entries(cf)
+        .filter(([k]) => FIELD_LABEL[k])
+        .map(([k, v]) => ({ label: FIELD_LABEL[k], old: v.old, new: v.new }))
+    : []
+  return {
+    id: e.id,
+    title,
+    at: e.created_at,
+    details,
+    restorable: RESTORABLE.has(e.action),
+    subject: e.subject || '',
+  }
+}
+
+async function restoreEntry(entry) {
+  restoringId.value = entry.id
+  try {
+    await http.post(`/api/changelog/${entry.id}/restore`)
+    restoredIds.value.add(entry.id) // кнопка станет бейджем «Откат выполнен»
+    showToast('ok', 'Откат выполнен')
+    // Обновляем и историю (появится запись об откате), и список (роль/профиль).
+    await Promise.all([openHistory(historyUser.value), fetchUsers()])
+  } catch (e) {
+    const code = e.response?.data?.error
+    if (code === 'restore_noop') {
+      // Состояние уже соответствует записи — это не ошибка, просто гасим кнопку.
+      restoredIds.value.add(entry.id)
+      showToast('ok', 'Откат уже выполнен')
+      return
+    }
+    const msg = code === 'restore_unsupported' ? 'Откат для этой записи не поддержан'
+      : code === 'log_not_found' ? 'Запись не найдена'
+      : e.response?.status === 403 ? 'Нет права на откат'
+      : 'Не удалось выполнить откат'
+    showToast('err', msg)
+  } finally {
+    restoringId.value = null
+  }
+}
+
+/* ─── Общий журнал изменений ─────────────────────────────────── */
+const journalOpen    = ref(false)
+const journalEntries = ref([])
+const journalLoading = ref(false)
+
+async function openJournal() {
+  journalOpen.value = true
+  journalEntries.value = []
+  journalLoading.value = true
+  try {
+    const { data } = await http.get('/api/changelog', { params: { limit: 100 } })
+    journalEntries.value = (Array.isArray(data) ? data : []).map(describeEntry)
+  } catch (e) {
+    showToast('err', e.response?.status === 403 ? 'Нет права на просмотр журнала' : 'Не удалось загрузить журнал')
+    journalOpen.value = false
+  } finally {
+    journalLoading.value = false
+  }
+}
+function closeJournal() { journalOpen.value = false; journalEntries.value = [] }
+
+function formatVal(v) {
+  return (v === null || v === undefined || v === '') ? '—' : String(v)
+}
+function fmtDateTime(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
 </script>
 
 <template>
@@ -207,6 +339,12 @@ function initials(u) {
           <h1 class="page-title">Управление ролями</h1>
           <span v-if="total > 0" class="total-chip">{{ total }} в системе</span>
         </div>
+        <button class="journal-btn" @click="openJournal" title="Последние изменения по всем">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3 2"/>
+          </svg>
+          Журнал изменений
+        </button>
       </div>
 
       <!-- ── Фильтры ── -->
@@ -263,6 +401,7 @@ function initials(u) {
                 <th>Группа</th>
                 <th>Текущая роль</th>
                 <th>Изменить роль</th>
+                <th>История</th>
               </tr>
             </thead>
             <tbody>
@@ -304,6 +443,14 @@ function initials(u) {
                     <span v-if="savingId === u.id" class="select-spinner" />
                   </div>
                 </td>
+                <td>
+                  <button type="button" class="hist-btn" title="История изменений" @click="openHistory(u)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3 2"/>
+                    </svg>
+                    История
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -336,6 +483,97 @@ function initials(u) {
 
       <div class="page-bottom-space" />
     </div>
+
+    <!-- ── История изменений ── -->
+    <Transition name="modal">
+      <div v-if="historyUser" class="modal-overlay" @click.self="closeHistory">
+        <div class="modal-card">
+          <div class="modal-head">
+            <div class="modal-head-text">
+              <h3 class="modal-title">История изменений</h3>
+              <span class="modal-sub">{{ fullName(historyUser) }}</span>
+            </div>
+            <button class="modal-close" @click="closeHistory" aria-label="Закрыть">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <p v-if="!historyLoading && historyEntries.length" class="modal-hint">
+              «Откатить» вернёт состояние на момент <b>до</b> выбранного изменения.
+            </p>
+            <div v-if="historyLoading" class="modal-state">Загрузка…</div>
+            <div v-else-if="!historyEntries.length" class="modal-state">Изменений пока нет</div>
+            <ul v-else class="hist-list">
+              <li v-for="e in historyEntries" :key="e.id" class="hist-item">
+                <div class="hist-item-head">
+                  <span class="hist-action">{{ e.title }}</span>
+                  <span class="hist-time">{{ fmtDateTime(e.at) }}</span>
+                </div>
+                <div v-if="e.details.length" class="hist-fields">
+                  <div v-for="(ln, i) in e.details" :key="i" class="hist-field">
+                    <span class="hist-field-label">{{ ln.label }}:</span>
+                    <span class="hist-val old">{{ formatVal(ln.old) }}</span>
+                    <svg class="hist-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                    <span class="hist-val new">{{ formatVal(ln.new) }}</span>
+                  </div>
+                </div>
+                <!-- По ТЗ: откат к состоянию из КОНКРЕТНОЙ записи (её "before").
+                     Доступен на каждой откатываемой записи. После отката кнопка
+                     превращается в серый бейдж — повторный откат той же записи
+                     ничего не меняет. -->
+                <div v-if="e.restorable" class="hist-item-foot">
+                  <button v-if="!restoredIds.has(e.id)" class="hist-restore" :disabled="restoringId === e.id" @click="restoreEntry(e)">
+                    {{ restoringId === e.id ? 'Откат…' : 'Откатить' }}
+                  </button>
+                  <span v-else class="hist-restored-badge" title="Откат этой записи уже выполнен">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+                    Откат выполнен
+                  </span>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- ── Журнал изменений (все сущности) ── -->
+    <Transition name="modal">
+      <div v-if="journalOpen" class="modal-overlay" @click.self="closeJournal">
+        <div class="modal-card">
+          <div class="modal-head">
+            <div class="modal-head-text">
+              <h3 class="modal-title">Журнал изменений</h3>
+              <span class="modal-sub">последние действия по всем пользователям и ролям</span>
+            </div>
+            <button class="modal-close" @click="closeJournal" aria-label="Закрыть">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <div v-if="journalLoading" class="modal-state">Загрузка…</div>
+            <div v-else-if="!journalEntries.length" class="modal-state">Журнал пуст</div>
+            <ul v-else class="hist-list">
+              <li v-for="e in journalEntries" :key="e.id" class="hist-item">
+                <div class="hist-item-head">
+                  <span class="hist-action">{{ e.title }}</span>
+                  <span class="hist-time">{{ fmtDateTime(e.at) }}</span>
+                </div>
+                <div v-if="e.subject" class="hist-subject">{{ e.subject }}</div>
+                <div v-if="e.details.length" class="hist-fields">
+                  <div v-for="(ln, i) in e.details" :key="i" class="hist-field">
+                    <span class="hist-field-label">{{ ln.label }}:</span>
+                    <span class="hist-val old">{{ formatVal(ln.old) }}</span>
+                    <svg class="hist-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                    <span class="hist-val new">{{ formatVal(ln.new) }}</span>
+                  </div>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </Transition>
 
     <!-- ── Toast ── -->
     <Transition name="toast">
@@ -534,6 +772,104 @@ function initials(u) {
 .toast--err { background: #dc2626; color: #fff; }
 .toast-enter-active, .toast-leave-active { transition: opacity .25s var(--ease), transform .25s var(--ease); }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translate(-50%, 12px); }
+
+/* ── История: кнопка в строке ── */
+.hist-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px; border-radius: 8px;
+  border: 1.5px solid var(--line); background: var(--card);
+  color: var(--ink-soft); font: 500 12px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.hist-btn:hover { border-color: var(--brand); color: var(--brand); background: rgba(59,63,224,.05); }
+.hist-btn svg { width: 14px; height: 14px; }
+
+/* ── Кнопка «Журнал изменений» в шапке ── */
+.journal-btn {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 36px; padding: 0 14px; border-radius: 9px;
+  border: 1.5px solid var(--brand); background: rgba(59,63,224,.06); color: var(--brand);
+  font: 600 13px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap;
+  transition: background .15s;
+}
+.journal-btn:hover { background: rgba(59,63,224,.12); }
+.journal-btn svg { width: 15px; height: 15px; }
+.hist-subject { margin-top: 5px; font: 600 13px/1.3 'Inter', sans-serif; color: var(--ink); }
+
+/* ── История: модалка ── */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 400;
+  background: rgba(10,12,30,.45);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.modal-card {
+  width: 100%; max-width: 560px; max-height: 82vh;
+  background: var(--card); border-radius: 14px; overflow: hidden;
+  display: flex; flex-direction: column;
+  box-shadow: 0 24px 60px -16px rgba(10,12,30,.4);
+}
+.modal-head {
+  position: relative;
+  padding: 18px 48px; border-bottom: 1px solid var(--line);
+  text-align: center;
+}
+.modal-head-text { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+.modal-title { margin: 0; font: 700 16px/1.2 'Inter', sans-serif; color: var(--ink); }
+.modal-sub { font: 500 12px/1.4 'Inter', sans-serif; color: var(--ink-soft); }
+.modal-close {
+  position: absolute; top: 14px; right: 14px;
+  width: 30px; height: 30px; border: none; background: none; cursor: pointer;
+  border-radius: 8px; display: grid; place-items: center; color: var(--ink-soft);
+  transition: background .15s, color .15s;
+}
+.modal-hint {
+  margin: 0 0 8px; padding: 8px 12px; border-radius: 8px;
+  background: rgba(59,63,224,.06); color: var(--brand-ink);
+  font: 500 12px/1.4 'Inter', sans-serif;
+}
+.modal-close:hover { background: var(--bg); color: var(--ink); }
+.modal-close svg { width: 16px; height: 16px; }
+.modal-body { padding: 8px 20px 20px; overflow-y: auto; }
+.modal-state { padding: 32px 0; text-align: center; color: var(--ink-soft); font: 500 13px/1 'Inter', sans-serif; }
+
+.hist-list { list-style: none; margin: 0; padding: 0; }
+.hist-item { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.hist-item:last-child { border-bottom: none; }
+.hist-item-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.hist-action {
+  font: 600 13px/1.3 'Inter', sans-serif; color: var(--ink);
+  background: rgba(59,63,224,.08); padding: 4px 10px; border-radius: 7px;
+}
+.hist-time { font: 12px/1.3 'Inter', sans-serif; color: var(--ink-soft); white-space: nowrap; flex-shrink: 0; margin-top: 2px; }
+.hist-fields { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.hist-field { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font: 13px/1.4 'Inter', sans-serif; }
+.hist-field-label { color: var(--ink-soft); }
+.hist-val { color: var(--ink); }
+.hist-val.old { color: #b45309; text-decoration: line-through; opacity: .8; }
+.hist-val.new { color: #065f46; font-weight: 600; }
+.hist-arrow { width: 14px; height: 14px; color: var(--ink-soft); flex-shrink: 0; }
+.hist-item-foot { margin-top: 10px; }
+.hist-restore {
+  height: 30px; padding: 0 14px; border-radius: 8px; cursor: pointer;
+  border: 1.5px solid var(--brand); background: rgba(59,63,224,.06); color: var(--brand);
+  font: 600 12px/1 'Inter', sans-serif;
+  transition: background .15s, opacity .15s;
+}
+.hist-restore:hover:not(:disabled) { background: rgba(59,63,224,.12); }
+.hist-restore:disabled { opacity: .5; cursor: default; }
+.hist-restored-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 12px; border-radius: 8px;
+  border: 1.5px solid var(--border, #d9dce3); background: rgba(120,125,140,.08);
+  color: var(--muted, #7a8090); font: 600 12px/1 'Inter', sans-serif;
+}
+.hist-restored-badge svg { width: 14px; height: 14px; }
+
+.modal-enter-active, .modal-leave-active { transition: opacity .2s var(--ease); }
+.modal-enter-from, .modal-leave-to { opacity: 0; }
+.modal-enter-active .modal-card, .modal-leave-active .modal-card { transition: transform .2s var(--ease); }
+.modal-enter-from .modal-card, .modal-leave-to .modal-card { transform: translateY(12px); }
 
 /* ── Responsive ── */
 @media (max-width: 600px) {

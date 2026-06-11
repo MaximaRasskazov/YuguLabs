@@ -51,6 +51,8 @@ func mountRBAC(r chi.Router, d Deps) {
 		r.With(mw.RequirePermission(d.RBAC, "roles.assign")).
 			Post("/roles", h.AssignRole)
 		r.With(mw.RequirePermission(d.RBAC, "roles.assign")).
+			Post("/roles/change", h.ChangeRole)
+		r.With(mw.RequirePermission(d.RBAC, "roles.assign")).
 			Delete("/roles/{slug}", h.RevokeRole)
 	})
 }

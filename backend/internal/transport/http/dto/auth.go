@@ -55,7 +55,17 @@ type UserResponse struct {
 	MiddleName *string    `json:"middle_name,omitempty"`
 	Birthday   *time.Time `json:"birthday,omitempty"`
 	GroupName  *string    `json:"group_name,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
+	// AvatarURL — относительный URL аватара с версией (?v=unix) для
+	// cache-busting; nil, если аватар не загружен. Заполняется только там,
+	// где сервис проверил наличие (напр. /api/auth/me).
+	AvatarURL *string   `json:"avatar_url,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AvatarResponse — ответ на загрузку аватара: URL с версией, чтобы фронт
+// сразу показал свежую картинку без перезагрузки.
+type AvatarResponse struct {
+	AvatarURL string `json:"avatar_url"`
 }
 
 // RoleResponse — компактное представление роли для /me.

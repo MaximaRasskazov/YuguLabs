@@ -31,6 +31,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changerequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/deploy"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
@@ -88,10 +89,27 @@ func run() error {
 	rbacSvc := rbac.New(store)
 	auditSvc := audit.New(store)
 	changelogSvc := changelog.New(store)
+	// История мутаций users/roles: auth и rbac пишут в change_logs.
+	authSvc.SetChangelog(changelogSvc)
+	rbacSvc.SetChangelog(changelogSvc)
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
 	reportSvc := report.New(store)
 
 	usersSvc := usersvc.New(store)
+
+	// Webhook авто-деплоя (лаба №6). Без БД: запускает git-команды в
+	// GIT_REPO_PATH под in-process блокировкой и пишет журнал деплоя.
+	deploySvc := deploy.New(
+		deploy.Config{
+			RepoPath: cfg.GitRepoPath,
+			Branch:   cfg.GitDefaultBranch,
+			Timeout:  cfg.GitDeployTimeout,
+			LockTTL:  cfg.GitDeployTimeout,
+		},
+		deploy.NewGitRunner(),
+		deploy.NewMemoryLock(),
+		deploy.NewFileRecorder(cfg.GitDeployLog),
+	)
 
 	notifyHub := notify.NewHub()
 	notifySvc := notify.NewService(store, notifyHub, notify.EmailConfig{
@@ -195,6 +213,8 @@ func run() error {
 		TeacherRequests: teacherRequestSvc,
 		Sync:            syncSvc,
 		Users:           usersSvc,
+		Changelog:       changelogSvc,
+		Deploy:          deploySvc,
 	})
 
 	srv := &http.Server{

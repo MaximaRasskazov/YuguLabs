@@ -36,6 +36,49 @@ async function changePassword() {
   }
 }
 
+// ── Avatar ────────────────────────────────────────────────
+const fileInput = ref(null)
+const avatarLoading = ref(false)
+const avatarError = ref('')
+
+const MAX_AVATAR = 2 * 1024 * 1024 // 2 МБ — синхронно с бэкендом
+const ALLOWED_AVATAR = ['image/jpeg', 'image/png', 'image/webp']
+
+function pickAvatar() {
+  avatarError.value = ''
+  fileInput.value?.click()
+}
+
+async function onAvatarPicked(e) {
+  const file = e.target.files?.[0]
+  e.target.value = '' // сброс — чтобы повторный выбор того же файла сработал
+  if (!file) return
+  if (!ALLOWED_AVATAR.includes(file.type)) { avatarError.value = 'Нужен JPEG, PNG или WebP'; return }
+  if (file.size > MAX_AVATAR) { avatarError.value = 'Файл больше 2 МБ'; return }
+  avatarLoading.value = true
+  try {
+    const { data } = await authApi.uploadAvatar(file)
+    auth.setAvatar(data.avatar_url)
+  } catch (err) {
+    avatarError.value = err.response?.data?.message || 'Не удалось загрузить фото'
+  } finally {
+    avatarLoading.value = false
+  }
+}
+
+async function removeAvatar() {
+  avatarError.value = ''
+  avatarLoading.value = true
+  try {
+    await authApi.deleteAvatar()
+    auth.setAvatar(null)
+  } catch {
+    avatarError.value = 'Не удалось удалить фото'
+  } finally {
+    avatarLoading.value = false
+  }
+}
+
 // ── Computed ──────────────────────────────────────────────
 const initials = computed(() => {
   const f = auth.user?.firstName?.[0] ?? ''
@@ -61,12 +104,43 @@ const fullName = computed(() =>
 
           <!-- Avatar + Name -->
           <div class="hero-section">
-            <div class="avatar-btn">
-              <span class="avatar-initials">{{ initials }}</span>
-            </div>
+            <button type="button" class="avatar-btn" :disabled="avatarLoading" title="Сменить фото" @click="pickAvatar">
+              <img
+                v-if="auth.user?.avatar"
+                :src="auth.user.avatar"
+                alt="Аватар"
+                class="avatar-img"
+                @error="auth.setAvatar(null)"
+              />
+              <span v-else class="avatar-initials">{{ initials }}</span>
+              <span class="avatar-overlay">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                  <circle cx="12" cy="13" r="4"/>
+                </svg>
+              </span>
+            </button>
+            <input
+              ref="fileInput"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              class="file-hidden"
+              @change="onAvatarPicked"
+            />
             <div class="hero-meta">
               <div class="hero-name">{{ fullName }}</div>
               <span class="role-label">{{ ROLE_LABEL[auth.role] ?? auth.role }}</span>
+              <div class="avatar-actions">
+                <button
+                  v-if="auth.user?.avatar"
+                  type="button"
+                  class="avatar-remove"
+                  :disabled="avatarLoading"
+                  @click="removeAvatar"
+                >Удалить фото</button>
+                <span v-if="avatarLoading" class="avatar-hint">Загрузка…</span>
+                <span v-if="avatarError" class="avatar-err">{{ avatarError }}</span>
+              </div>
             </div>
           </div>
 
@@ -222,7 +296,21 @@ const fullName = computed(() =>
   opacity: 0; transition: opacity .2s var(--ease);
 }
 .avatar-btn:hover .avatar-overlay { opacity: 1; }
+.avatar-btn:disabled { cursor: default; opacity: .7; }
 .avatar-overlay svg { width: 24px; height: 24px; stroke: #fff; }
+
+.file-hidden { display: none; }
+
+.avatar-actions { display: flex; align-items: center; gap: 10px; margin-top: 2px; min-height: 16px; }
+.avatar-remove {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: 500 12px/1 'Inter', sans-serif; color: var(--ink-soft);
+  text-decoration: underline; transition: color .15s;
+}
+.avatar-remove:hover { color: #dc2626; }
+.avatar-remove:disabled { opacity: .5; cursor: default; }
+.avatar-hint { font: 12px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.avatar-err  { font: 12px/1 'Inter', sans-serif; color: #dc2626; }
 
 .hero-meta { display: flex; flex-direction: column; gap: 6px; }
 .hero-name {

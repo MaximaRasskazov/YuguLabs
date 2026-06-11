@@ -117,6 +117,45 @@ const initials = computed(() => {
 const fullName = computed(() =>
   [auth.user?.lastName, auth.user?.firstName, auth.user?.middleName].filter(Boolean).join(' ')
 )
+// ── Аватар ────────────────────────────────────────────────
+const fileInput = ref(null)
+const avatarLoading = ref(false)
+const avatarError = ref('')
+const MAX_AVATAR = 2 * 1024 * 1024 // 2 МБ — синхронно с бэкендом
+const ALLOWED_AVATAR = ['image/jpeg', 'image/png', 'image/webp']
+
+function pickAvatar() {
+  avatarError.value = ''
+  fileInput.value?.click()
+}
+async function onAvatarPicked(e) {
+  const file = e.target.files?.[0]
+  e.target.value = '' // сброс — чтобы повторный выбор того же файла сработал
+  if (!file) return
+  if (!ALLOWED_AVATAR.includes(file.type)) { avatarError.value = 'Нужен JPEG, PNG или WebP'; return }
+  if (file.size > MAX_AVATAR) { avatarError.value = 'Файл больше 2 МБ'; return }
+  avatarLoading.value = true
+  try {
+    const { data } = await authApi.uploadAvatar(file)
+    auth.setAvatar(data.avatar_url)
+  } catch {
+    avatarError.value = 'Не удалось загрузить фото'
+  } finally {
+    avatarLoading.value = false
+  }
+}
+async function removeAvatar() {
+  avatarError.value = ''
+  avatarLoading.value = true
+  try {
+    await authApi.deleteAvatar()
+    auth.setAvatar(null)
+  } catch {
+    avatarError.value = 'Не удалось удалить фото'
+  } finally {
+    avatarLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -145,11 +184,40 @@ const fullName = computed(() =>
 
             <!-- Hero -->
             <div class="hero">
-              <div class="avatar-display">
-                <span class="avatar-initials">{{ initials }}</span>
-              </div>
+              <button
+                type="button"
+                class="avatar-display"
+                :disabled="avatarLoading"
+                title="Сменить фото"
+                @click="pickAvatar"
+              >
+                <img
+                  v-if="auth.user?.avatar"
+                  :src="auth.user.avatar"
+                  alt="Аватар"
+                  class="avatar-img"
+                  @error="auth.setAvatar(null)"
+                />
+                <span v-else class="avatar-initials">{{ initials }}</span>
+                <span class="avatar-cam">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>
+                  </svg>
+                </span>
+              </button>
+              <input
+                ref="fileInput"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                class="file-hidden"
+                @change="onAvatarPicked"
+              />
               <div class="hero-name">{{ fullName }}</div>
               <span class="role-chip">{{ ROLE_LABEL[auth.role] }}</span>
+              <button v-if="auth.user?.avatar" type="button" class="avatar-remove" :disabled="avatarLoading" @click="removeAvatar">
+                Удалить фото
+              </button>
+              <span v-if="avatarError" class="avatar-err">{{ avatarError }}</span>
 
               <!-- Повышение до преподавателя (только для студента) -->
               <template v-if="isStudent">
@@ -343,10 +411,32 @@ const fullName = computed(() =>
 }
 
 .avatar-display {
+  position: relative;
   width: 88px; height: 88px; border-radius: 50%; flex-shrink: 0;
   background: linear-gradient(135deg, #2b5cff, #8b3df0);
   display: grid; place-items: center;
+  overflow: hidden;
+  border: none; padding: 0; cursor: pointer;
 }
+.avatar-display:disabled { cursor: default; opacity: .7; }
+.avatar-display .avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar-cam {
+  position: absolute; inset: 0;
+  background: rgba(10,12,30,.45);
+  display: grid; place-items: center;
+  opacity: 0; transition: opacity .18s ease;
+}
+.avatar-display:hover .avatar-cam { opacity: 1; }
+.avatar-cam svg { width: 22px; height: 22px; stroke: #fff; }
+.file-hidden { display: none; }
+.avatar-remove {
+  margin-top: 2px; background: none; border: none; padding: 0; cursor: pointer;
+  font: 500 12px/1 'Inter', sans-serif; color: #6b7280; text-decoration: underline;
+  transition: color .15s;
+}
+.avatar-remove:hover { color: #dc2626; }
+.avatar-remove:disabled { opacity: .5; cursor: default; }
+.avatar-err { font: 12px/1 'Inter', sans-serif; color: #dc2626; }
 .avatar-initials {
   font: 700 28px/1 'Inter', sans-serif; color: #fff; pointer-events: none;
 }

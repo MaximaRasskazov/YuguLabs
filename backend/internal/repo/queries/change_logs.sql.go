@@ -208,3 +208,73 @@ func (q *Queries) ListChangeLogsForEntity(ctx context.Context, arg ListChangeLog
 	}
 	return items, nil
 }
+
+const listRecentChangeLogs = `-- name: ListRecentChangeLogs :many
+SELECT
+    cl.id, cl.entity_type, cl.entity_id, cl.action, cl.before, cl.after, cl.created_at, cl.created_by,
+    u.last_name   AS subject_last_name,
+    u.first_name  AS subject_first_name,
+    u.middle_name AS subject_middle_name
+FROM change_logs cl
+LEFT JOIN users u ON cl.entity_type = 'user' AND u.id = cl.entity_id::uuid
+WHERE cl.entity_type IN ('user', 'role', 'permission')
+  AND NOT (cl.entity_type = 'role' AND cl.action IN ('role_assigned', 'role_revoked'))
+ORDER BY cl.created_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type ListRecentChangeLogsParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+type ListRecentChangeLogsRow struct {
+	ID                int64              `json:"id"`
+	EntityType        string             `json:"entity_type"`
+	EntityID          string             `json:"entity_id"`
+	Action            string             `json:"action"`
+	Before            []byte             `json:"before"`
+	After             []byte             `json:"after"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	CreatedBy         pgtype.UUID        `json:"created_by"`
+	SubjectLastName   *string            `json:"subject_last_name"`
+	SubjectFirstName  *string            `json:"subject_first_name"`
+	SubjectMiddleName *string            `json:"subject_middle_name"`
+}
+
+// Общий журнал последних изменений для админ-вкладки «Журнал изменений».
+// Только сущности users/roles/permissions (доменные debt/retake/discipline
+// сюда не тянем — это техника, не для человека). Зеркальные role-side
+// записи смены роли скрыты (операция видна со стороны пользователя).
+// К user-записям подтягиваем ФИО, чтобы лента читалась без UUID.
+func (q *Queries) ListRecentChangeLogs(ctx context.Context, arg ListRecentChangeLogsParams) ([]ListRecentChangeLogsRow, error) {
+	rows, err := q.db.Query(ctx, listRecentChangeLogs, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecentChangeLogsRow
+	for rows.Next() {
+		var i ListRecentChangeLogsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.EntityType,
+			&i.EntityID,
+			&i.Action,
+			&i.Before,
+			&i.After,
+			&i.CreatedAt,
+			&i.CreatedBy,
+			&i.SubjectLastName,
+			&i.SubjectFirstName,
+			&i.SubjectMiddleName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

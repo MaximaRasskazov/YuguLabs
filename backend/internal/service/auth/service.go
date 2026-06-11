@@ -20,6 +20,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 )
 
@@ -56,9 +57,10 @@ type EmulatorAuth interface {
 
 // Service — обёртка над хранилищем и TokenService.
 type Service struct {
-	store    *repo.Store
-	tokens   *token.Service
-	emulator EmulatorAuth // может быть nil — тогда эмулятор-логин отключён
+	store     *repo.Store
+	tokens    *token.Service
+	emulator  EmulatorAuth       // может быть nil — тогда эмулятор-логин отключён
+	changelog *changelog.Service // может быть nil — тогда мутации не пишутся в change_logs
 }
 
 // New собирает Service. emu может быть nil (тесты, отсутствие
@@ -66,6 +68,11 @@ type Service struct {
 func New(store *repo.Store, tokens *token.Service, emu EmulatorAuth) *Service {
 	return &Service{store: store, tokens: tokens, emulator: emu}
 }
+
+// SetChangelog подключает запись истории мутаций пользователя в change_logs.
+// Вынесено в сеттер (а не параметр New), чтобы не ломать существующие
+// вызовы и тесты. nil = логирование выключено.
+func (s *Service) SetChangelog(c *changelog.Service) { s.changelog = c }
 
 // RegisterInput — параметры регистрации. MiddleName/Birthday/GroupName
 // опциональны (студенту нужна группа, но мы не валидируем это здесь —
@@ -89,9 +96,10 @@ type Result struct {
 // Profile — данные для GET /api/auth/me.
 // Раздаёт минимум, нужный фронту для отрисовки UI и RBAC-проверок.
 type Profile struct {
-	User        queries.User
-	Roles       []queries.Role
-	Permissions []string // slug'и активных permission'ов
+	User            queries.User
+	Roles           []queries.Role
+	Permissions     []string   // slug'и активных permission'ов
+	AvatarUpdatedAt *time.Time // время загрузки аватара (версия для URL), nil если нет
 }
 
 // Register создаёт нового пользователя со студентской ролью и сразу
@@ -140,6 +148,12 @@ func (s *Service) Register(ctx context.Context, in RegisterInput, ip string) (*R
 		})
 		if err != nil {
 			return fmt.Errorf("attach default role: %w", err)
+		}
+		if s.changelog != nil {
+			uid := pgutil.UUID(u.ID)
+			if err := s.changelog.LogCreatedTx(ctx, q, changelog.EntityUser, uid.String(), changelog.UserSnapshot(u), uid); err != nil {
+				return fmt.Errorf("changelog created: %w", err)
+			}
 		}
 		created = u
 		return nil
@@ -252,7 +266,12 @@ func (s *Service) Me(ctx context.Context, userID uuid.UUID) (*Profile, error) {
 		return nil, fmt.Errorf("list permissions: %w", err)
 	}
 
-	return &Profile{User: user, Roles: roles, Permissions: perms}, nil
+	return &Profile{
+		User:            user,
+		Roles:           roles,
+		Permissions:     perms,
+		AvatarUpdatedAt: s.avatarUpdatedAt(ctx, pgID),
+	}, nil
 }
 
 func validateRegister(in RegisterInput) error {

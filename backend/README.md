@@ -47,7 +47,7 @@ backend/
 │       ├── middleware/        # Auth, RequirePermission, CORS, SecurityHeaders
 │       └── router.go          # сборка chi.Router + mount* для каждой доменной группы
 ├── sql/
-│   ├── migrations/            # 00001-00019 — auth, RBAC, audit, changelog + доменные таблицы
+│   ├── migrations/            # 00001-00027 — auth, RBAC, audit, changelog, аватары + доменные таблицы
 │   └── seeds/                 # 00001_seed_dev_accounts — для SEED_DEV_ACCOUNTS=true
 ├── Dockerfile                 # multi-stage + goose CLI + entrypoint.sh
 ├── entrypoint.sh              # wait-for-postgres → goose up → seeds → exec server
@@ -70,6 +70,9 @@ backend/
 | GET | `/api/auth/me` | Auth | Профиль + roles + permissions |
 | PATCH | `/api/me` | Auth | Обновить профиль (PATCH-семантика: first_name/last_name/middle_name/group_name/birthday). Email и пароль НЕ через этот endpoint. |
 | POST | `/api/me/password` | Auth | Сменить пароль: body `{current_password, new_password}`. Атомарно ревокует все access-токены пользователя — нужно перелогиниться. 401 при неверном current, 400 при new<8 или совпадающем с current. |
+| POST | `/api/me/avatar` | Auth | Загрузить аватар (multipart, поле `avatar`). JPEG/PNG/WebP до 2 МБ; тип проверяется по сигнатуре файла. Ответ `{avatar_url}`. 413 если больше 2 МБ, 415 при неверном типе. |
+| DELETE | `/api/me/avatar` | Auth | Удалить свой аватар |
+| GET | `/api/users/:id/avatar` | — | Отдать картинку аватара (публично — для тега `<img>`). 404 если аватара нет. |
 
 ### Users (список — admin / dean)
 | Метод | Путь | Permission | Назначение |
@@ -144,6 +147,23 @@ backend/
 | POST | `/api/notifications/:id/read` | Auth | Отметить прочитанным |
 | GET | `/ws/notifications` | Auth (через query `token`) | WebSocket для push-уведомлений |
 
+### История изменений (audit / undo)
+Полные срезы before/after мутаций пишутся в `change_logs` транзакционно вместе с операцией. История наружу отдаётся диффом: `changed_fields` = `{ поле: {old, new} }` (только изменившиеся). См. [docs/audit-logging.md](../docs/audit-logging.md).
+| Метод | Путь | Permission | Назначение |
+|---|---|---|---|
+| GET | `/api/changelog?limit=&offset=` | `changelog.view` | Общий журнал последних изменений по всем сущностям (новые сверху) |
+| GET | `/api/users/:id/story` | `changelog.view` | История изменений пользователя (создание/правка профиля, выдача/снятие ролей) |
+| GET | `/api/roles/:id/story` | `changelog.view` | История изменений роли (кому выдавали/снимали) |
+| GET | `/api/permissions/:id/story` | `changelog.view` | История изменений права (обычно пуста — CRUD прав в системе нет) |
+| POST | `/api/changelog/:id/restore` | `changelog.restore` | Откат (undo) к состоянию `before` из записи лога. Поддержаны профиль пользователя, выдача/снятие роли и атомарная смена роли (`role_changed`); сам откат тоже логируется (`restored_from_log`). 422 если откат не поддержан, 404 если записи нет, **409 `restore_noop`** если откат уже выполнен (состояние уже целевое). |
+| POST | `/api/users/:id/roles/change` | `roles.assign` | Атомарная смена роли: `{from_slug, to_slug}` — снять старую и выдать новую в одной транзакции (одно событие `role_changed`). Идемпотентна, под privilege-escalation guard. |
+
+### Деплой (git-webhook)
+Авто-деплой по webhook'у: проверка секретного ключа → `git checkout/reset/pull` под блокировкой, с журналом и обработкой ошибок. Маршрут открыт (без auth), защищён только `GIT_WEBHOOK_SECRET`. См. [docs/git-webhook.md](../docs/git-webhook.md).
+| Метод | Путь | Permission | Назначение |
+|---|---|---|---|
+| POST | `/api/hooks/git` | — (secret_key) | Запустить деплой. `secret_key` в JSON или form-data. 200 (JSON со списком шагов), 403 неверный ключ, 409 деплой уже идёт, 500 ошибка git, 503 если `GIT_WEBHOOK_SECRET` не задан. |
+
 ### Системные
 | Метод | Путь | Назначение |
 |---|---|---|
@@ -195,6 +215,7 @@ make sqlc                     # перегенерировать internal/repo/q
 | Cookie | `COOKIE_SECURE`, `COOKIE_DOMAIN`, `COOKIE_PATH`, `COOKIE_SAMESITE` |
 | CORS | `ALLOWED_ORIGINS` (через запятую) |
 | Dev | `SEED_DEV_ACCOUNTS` — катить ли сиды демо-аккаунтов |
+| Git-webhook | `GIT_WEBHOOK_SECRET` (пусто = выкл/503), `GIT_DEFAULT_BRANCH`, `GIT_REPO_PATH`, `GIT_DEPLOY_LOG`, `GIT_DEPLOY_TIMEOUT` |
 
 ## Демо-аккаунты для разработки
 
@@ -249,6 +270,11 @@ make sqlc                     # перегенерировать internal/repo/q
 | Задача | Содержание |
 |---|---|
 | BACK-05 | TeacherRoleRequest + RBAC HTTP API (у товарища, ветка `feat/back-05-teacher-requests`) |
+| Скрыть регистрацию | Убрана ссылка на регистрацию со страницы входа (ветка `chore/hide-register-link`) |
+| Восстановление пароля | Рабочий сброс по коду на email: notify + ручки `/api/auth/recover/*` (ветка `feat/password-reset`, миграция 00025) |
+| Аватар профиля | Загрузка/удаление аватара (bytea), `/api/me/avatar` + публичная отдача (рабочее дерево, миграция 00026) |
+| Логирование мутаций | История изменений users/roles + дифф `changed_fields` + undo: `/api/.../story`, `/api/changelog/:id/restore` (рабочее дерево, миграция 00027). См. [docs/audit-logging.md](../docs/audit-logging.md) |
+| Git-webhook (лаба №6) | Авто-деплой `POST /api/hooks/git`: секретный ключ + `git checkout/reset/pull` под блокировкой + журнал + тесты (пакет `service/deploy`, рабочее дерево). См. [docs/git-webhook.md](../docs/git-webhook.md) |
 
 ### Покрытие тестами
 

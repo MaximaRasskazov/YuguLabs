@@ -15,3 +15,7 @@ Thumbs.db
 
 # Claude Code local settings (personal, могут содержать секреты)
 **/.claude/settings.local.json
+
+# Build caches / stray lockfiles
+frontend/.vite/
+/package-lock.json

@@ -21,6 +21,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 )
 
 // PermAssignRoles — slug разрешения, требуемого для выдачи ролей.
@@ -37,12 +38,17 @@ var (
 )
 
 type Service struct {
-	store *repo.Store
+	store     *repo.Store
+	changelog *changelog.Service // может быть nil — тогда смена ролей не пишется в change_logs
 }
 
 func New(store *repo.Store) *Service {
 	return &Service{store: store}
 }
+
+// SetChangelog подключает запись истории выдачи/снятия ролей в change_logs.
+// Сеттер (а не параметр New) — чтобы не ломать существующие вызовы/тесты.
+func (s *Service) SetChangelog(c *changelog.Service) { s.changelog = c }
 
 // HasPermission — основная горячая операция. Возвращает true, если
 // у userID есть активная привязка к роли, которая содержит permission
@@ -79,27 +85,17 @@ func (s *Service) AssignRole(ctx context.Context, actorID, targetID uuid.UUID, r
 		return err
 	}
 
-	pgActor := pgutil.PgUUID(actorID)
-	pgTarget := pgutil.PgUUID(targetID)
-
 	return s.store.RunInTx(ctx, func(q *queries.Queries) error {
-		if _, err := q.AttachRoleToUser(ctx, queries.AttachRoleToUserParams{
-			UserID:    pgTarget,
-			RoleID:    role.ID,
-			CreatedBy: pgActor,
-		}); err != nil {
-			return fmt.Errorf("attach role: %w", err)
+		// Идемпотентно: если роль уже активна — ничего не делаем. Повторная
+		// выдача не должна падать конфликтом частичного UNIQUE-индекса.
+		has, err := q.HasRole(ctx, queries.HasRoleParams{UserID: pgutil.PgUUID(targetID), Lower: role.Slug})
+		if err != nil {
+			return fmt.Errorf("check role: %w", err)
 		}
-		details := mustJSON(map[string]any{"role_slug": role.Slug, "role_id": pgutil.UUID(role.ID).String()})
-		targetStr := targetID.String()
-		_, err := q.CreateAuditEntry(ctx, queries.CreateAuditEntryParams{
-			ActorID:    pgActor,
-			Action:     "role.assign",
-			TargetType: "user",
-			TargetID:   &targetStr,
-			Details:    details,
-		})
-		return err
+		if has {
+			return nil
+		}
+		return s.attachRoleTx(ctx, q, actorID, targetID, role)
 	})
 }
 
@@ -115,28 +111,156 @@ func (s *Service) RevokeRole(ctx context.Context, actorID, targetID uuid.UUID, r
 		return err
 	}
 
+	return s.store.RunInTx(ctx, func(q *queries.Queries) error {
+		return s.detachRoleTx(ctx, q, actorID, targetID, role)
+	})
+}
+
+// ChangeRole атомарно меняет роль пользователя: в ОДНОЙ транзакции выдаёт
+// toSlug и снимает fromSlug (плюс audit и changelog по обеим). fromSlug
+// может быть пустым — если у пользователя ещё не было роли.
+//
+// Заменяет небезопасную последовательность из двух отдельных запросов
+// (POST assign, затем DELETE revoke): при ней между запросами у
+// пользователя оказывались сразу обе роли, а сбой второго запроса оставлял
+// рассинхрон. Здесь промежуточное состояние «обе роли» не видно наружу:
+// либо применяются оба изменения, либо ни одного.
+func (s *Service) ChangeRole(ctx context.Context, actorID, targetID uuid.UUID, fromSlug, toSlug string) error {
+	if toSlug == "" {
+		return ErrRoleNotFound // целевая роль обязательна
+	}
+	if fromSlug == toSlug {
+		return nil // менять нечего
+	}
+
+	toRole, err := s.lookupRole(ctx, toSlug)
+	if err != nil {
+		return err
+	}
+	if err := s.requireCanManage(ctx, actorID, toRole); err != nil {
+		return err
+	}
+
+	// Снимаемую роль тоже должно быть позволено трогать (симметрично с
+	// RevokeRole). Пустой fromSlug — снимать нечего.
+	var fromRole *queries.Role
+	if fromSlug != "" {
+		r, err := s.lookupRole(ctx, fromSlug)
+		if err != nil {
+			return err
+		}
+		if err := s.requireCanManage(ctx, actorID, r); err != nil {
+			return err
+		}
+		fromRole = &r
+	}
+
 	pgActor := pgutil.PgUUID(actorID)
 	pgTarget := pgutil.PgUUID(targetID)
 
 	return s.store.RunInTx(ctx, func(q *queries.Queries) error {
-		if err := q.DetachRoleFromUser(ctx, queries.DetachRoleFromUserParams{
-			UserID:    pgTarget,
-			RoleID:    role.ID,
-			DeletedBy: pgActor,
-		}); err != nil {
-			return fmt.Errorf("detach role: %w", err)
+		// Выдаём новую роль идемпотентно: если она уже есть, пропускаем
+		// attach, чтобы не упереться в UNIQUE-индекс. Затем снимаем старую.
+		has, err := q.HasRole(ctx, queries.HasRoleParams{UserID: pgTarget, Lower: toRole.Slug})
+		if err != nil {
+			return fmt.Errorf("check role: %w", err)
 		}
-		details := mustJSON(map[string]any{"role_slug": role.Slug})
+		if !has {
+			if _, err := q.AttachRoleToUser(ctx, queries.AttachRoleToUserParams{
+				UserID: pgTarget, RoleID: toRole.ID, CreatedBy: pgActor,
+			}); err != nil {
+				return fmt.Errorf("attach role: %w", err)
+			}
+		}
+		fromSlug, fromName := "", ""
+		if fromRole != nil {
+			fromSlug, fromName = fromRole.Slug, fromRole.Name
+			if err := q.DetachRoleFromUser(ctx, queries.DetachRoleFromUserParams{
+				UserID: pgTarget, RoleID: fromRole.ID, DeletedBy: pgActor,
+			}); err != nil {
+				return fmt.Errorf("detach role: %w", err)
+			}
+		}
+
+		// Смена роли — ОДНО событие в audit и в change_logs (а не пара
+		// assign+revoke): так история читается как «Роль изменена: X → Y»
+		// и откат возвращает прежнюю единственную роль целиком.
 		targetStr := targetID.String()
-		_, err := q.CreateAuditEntry(ctx, queries.CreateAuditEntryParams{
+		details := mustJSON(map[string]any{"from": fromSlug, "to": toRole.Slug})
+		if _, err := q.CreateAuditEntry(ctx, queries.CreateAuditEntryParams{
 			ActorID:    pgActor,
-			Action:     "role.revoke",
+			Action:     "role.change",
 			TargetType: "user",
 			TargetID:   &targetStr,
 			Details:    details,
-		})
-		return err
+		}); err != nil {
+			return err
+		}
+		if s.changelog != nil {
+			return s.changelog.LogRoleChangedTx(ctx, q, targetStr, fromSlug, fromName, toRole.Slug, toRole.Name, actorID)
+		}
+		return nil
 	})
+}
+
+// attachRoleTx выдаёт роль внутри уже открытой транзакции: role_user +
+// audit (role.assign) + changelog (role_assigned). Общий код для AssignRole
+// и ChangeRole.
+func (s *Service) attachRoleTx(ctx context.Context, q *queries.Queries, actorID, targetID uuid.UUID, role queries.Role) error {
+	pgActor := pgutil.PgUUID(actorID)
+	if _, err := q.AttachRoleToUser(ctx, queries.AttachRoleToUserParams{
+		UserID:    pgutil.PgUUID(targetID),
+		RoleID:    role.ID,
+		CreatedBy: pgActor,
+	}); err != nil {
+		return fmt.Errorf("attach role: %w", err)
+	}
+	targetStr := targetID.String()
+	details := mustJSON(map[string]any{"role_slug": role.Slug, "role_id": pgutil.UUID(role.ID).String()})
+	if _, err := q.CreateAuditEntry(ctx, queries.CreateAuditEntryParams{
+		ActorID:    pgActor,
+		Action:     "role.assign",
+		TargetType: "user",
+		TargetID:   &targetStr,
+		Details:    details,
+	}); err != nil {
+		return err
+	}
+	if s.changelog != nil {
+		return s.changelog.LogRoleChangeTx(ctx, q, changelog.ActionRoleAssigned,
+			targetStr, pgutil.UUID(role.ID).String(), role.Slug, role.Name, actorID)
+	}
+	return nil
+}
+
+// detachRoleTx снимает роль внутри уже открытой транзакции: role_user +
+// audit (role.revoke) + changelog (role_revoked). Общий код для RevokeRole
+// и ChangeRole.
+func (s *Service) detachRoleTx(ctx context.Context, q *queries.Queries, actorID, targetID uuid.UUID, role queries.Role) error {
+	pgActor := pgutil.PgUUID(actorID)
+	if err := q.DetachRoleFromUser(ctx, queries.DetachRoleFromUserParams{
+		UserID:    pgutil.PgUUID(targetID),
+		RoleID:    role.ID,
+		DeletedBy: pgActor,
+	}); err != nil {
+		return fmt.Errorf("detach role: %w", err)
+	}
+	targetStr := targetID.String()
+	details := mustJSON(map[string]any{"role_slug": role.Slug})
+	if _, err := q.CreateAuditEntry(ctx, queries.CreateAuditEntryParams{
+		ActorID:    pgActor,
+		Action:     "role.revoke",
+		TargetType: "user",
+		TargetID:   &targetStr,
+		Details:    details,
+	}); err != nil {
+		return err
+	}
+	if s.changelog != nil {
+		return s.changelog.LogRoleChangeTx(ctx, q, changelog.ActionRoleRevoked,
+			targetStr, pgutil.UUID(role.ID).String(), role.Slug, role.Name, actorID)
+	}
+	return nil
 }
 
 // MaxLevel возвращает максимальный level среди активных ролей

@@ -1,0 +1,68 @@
+###############################################################################
+# Git-webhook авто-деплоя (лаба №6) — сценарий для VS Code REST Client
+# (расширение humao.rest-client).
+#
+# Как пользоваться:
+#   1. В .env задай GIT_WEBHOOK_SECRET (иначе эндпоинт отвечает 503).
+#      Пример: openssl rand -hex 18   → строка 36 hex-символов.
+#   2. Подними стек: APP_PORT=8080 docker compose up -d --build
+#   3. Подставь свой ключ в @secret ниже.
+#   4. Нажимай "Send Request" над каждым запросом и смотри статус/тело.
+#
+# Запросы идут через фронт-nginx на :8080 → проксируются на backend.
+# Маршрут открыт без авторизации (Bearer не нужен) — защита только ключом.
+###############################################################################
+
+@baseUrl = http://localhost:8080
+@secret  = ЗАМЕНИ-НА-GIT_WEBHOOK_SECRET-ИЗ-ENV
+
+### 1. Успешный деплой, ключ в JSON-теле → 200 + JSON со списком шагов
+POST {{baseUrl}}/api/hooks/git
+Content-Type: application/json
+
+{ "secret_key": "{{secret}}" }
+
+### 2. Тот же ключ, но form-data (так шлёт большинство git-хостингов) → 200
+POST {{baseUrl}}/api/hooks/git
+Content-Type: application/x-www-form-urlencoded
+
+secret_key={{secret}}
+
+### 3. Неверный ключ → 403 Forbidden, {"message":"Invalid secret key"}
+POST {{baseUrl}}/api/hooks/git
+Content-Type: application/json
+
+{ "secret_key": "totally-wrong-key" }
+
+### 4. Тот же ключ, но в другом регистре → 403 (сравнение регистрозависимое)
+POST {{baseUrl}}/api/hooks/git
+Content-Type: application/json
+
+{ "secret_key": "{{secret}}-UPPER" }
+
+### 5. Запрос без ключа → 403
+POST {{baseUrl}}/api/hooks/git
+Content-Type: application/json
+
+{}
+
+###############################################################################
+# 6. Параллельный запуск → 409 Conflict ("Deployment already in progress").
+#    В REST Client запросы синхронные, поэтому поймать гонку вручную трудно.
+#    Проще проверить из терминала — два запроса «внахлёст»:
+#
+#      for i in 1 2; do \
+#        curl -s -o /dev/null -w "%{http_code}\n" \
+#          -X POST http://localhost:8080/api/hooks/git \
+#          -H 'Content-Type: application/json' \
+#          -d '{"secret_key":"ВАШ_КЛЮЧ"}' & \
+#      done; wait
+#
+#    Ожидаемо: один ответ 200, второй 409.
+#
+# 7. Если GIT_WEBHOOK_SECRET пуст в .env — любой запрос вернёт 503
+#    ("git webhook is not configured"): хук намеренно выключен без ключа.
+#
+# Журнал деплоя: storage/logs/deployment.log (по строке-JSON на событие:
+# started → command (×3) → finished). Секрет в журнал не попадает.
+###############################################################################

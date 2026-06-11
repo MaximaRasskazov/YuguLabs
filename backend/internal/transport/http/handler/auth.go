@@ -179,8 +179,13 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user := dto.FromUser(profile.User)
+	if profile.AvatarUpdatedAt != nil {
+		u := avatarURL(user.ID, *profile.AvatarUpdatedAt)
+		user.AvatarURL = &u
+	}
 	writeJSON(w, http.StatusOK, dto.ProfileResponse{
-		User:        dto.FromUser(profile.User),
+		User:        user,
 		Roles:       dto.FromRoles(profile.Roles),
 		Permissions: profile.Permissions,
 	})

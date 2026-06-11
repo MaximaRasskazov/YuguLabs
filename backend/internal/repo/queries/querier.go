@@ -67,6 +67,7 @@ type Querier interface {
 	// Периодическая чистка таблицы фоновой задачей.
 	DeleteExpiredAccessTokens(ctx context.Context) (int64, error)
 	DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
+	DeleteUserAvatar(ctx context.Context, userID pgtype.UUID) error
 	DetachPermissionFromRole(ctx context.Context, arg DetachPermissionFromRoleParams) error
 	DetachRoleFromUser(ctx context.Context, arg DetachRoleFromUserParams) error
 	DetachStudentFromDiscipline(ctx context.Context, arg DetachStudentFromDisciplineParams) error
@@ -110,6 +111,9 @@ type Querier interface {
 	GetRoleBySlug(ctx context.Context, lower string) (Role, error)
 	GetStatementSheetByRetake(ctx context.Context, retakeID pgtype.UUID) (StatementSheet, error)
 	GetTeacherRoleRequestByID(ctx context.Context, id pgtype.UUID) (TeacherRoleRequest, error)
+	GetUserAvatar(ctx context.Context, userID pgtype.UUID) (GetUserAvatarRow, error)
+	// Лёгкая проверка наличия + версия (updated_at) без выгрузки байтов.
+	GetUserAvatarMeta(ctx context.Context, userID pgtype.UUID) (GetUserAvatarMetaRow, error)
 	// Поиск пользователя по email для логина. Сравнение регистронезависимое
 	// (соответствует UNIQUE-индексу idx_users_email_lower).
 	GetUserByEmail(ctx context.Context, lower string) (User, error)
@@ -193,6 +197,12 @@ type Querier interface {
 	// может быть прикреплён к нескольким ролям пользователя.
 	ListPermissionsForUser(ctx context.Context, userID pgtype.UUID) ([]string, error)
 	ListRecentAudit(ctx context.Context, arg ListRecentAuditParams) ([]AuditLog, error)
+	// Общий журнал последних изменений для админ-вкладки «Журнал изменений».
+	// Только сущности users/roles/permissions (доменные debt/retake/discipline
+	// сюда не тянем — это техника, не для человека). Зеркальные role-side
+	// записи смены роли скрыты (операция видна со стороны пользователя).
+	// К user-записям подтягиваем ФИО, чтобы лента читалась без UUID.
+	ListRecentChangeLogs(ctx context.Context, arg ListRecentChangeLogsParams) ([]ListRecentChangeLogsRow, error)
 	ListRetakeChangeRequestsForRetake(ctx context.Context, retakeID pgtype.UUID) ([]RetakeChangeRequest, error)
 	// История заявок преподавателя.
 	ListRetakeChangeRequestsForTeacher(ctx context.Context, arg ListRetakeChangeRequestsForTeacherParams) ([]RetakeChangeRequest, error)
@@ -328,6 +338,7 @@ type Querier interface {
 	// "кем/когда внесён черновик". Долг при этом НЕ закрывается — это
 	// делает CloseSheet.
 	UpsertParticipantGradeDraft(ctx context.Context, arg UpsertParticipantGradeDraftParams) (RetakeParticipant, error)
+	UpsertUserAvatar(ctx context.Context, arg UpsertUserAvatarParams) error
 	// Точечная проверка на конкретный permission по slug. Используется в
 	// RBAC-middleware на каждом защищённом запросе.
 	UserHasPermission(ctx context.Context, arg UserHasPermissionParams) (bool, error)

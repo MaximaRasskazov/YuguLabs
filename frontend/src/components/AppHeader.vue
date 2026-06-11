@@ -30,7 +30,7 @@ const roleLabel = computed(() => ({
         <span class="user-role">{{ roleLabel }}</span>
       </div>
       <button class="avatar" @click="profileOpen = true" aria-label="Открыть профиль">
-        <img v-if="auth.user?.avatar" :src="auth.user.avatar" alt="Фото профиля" />
+        <img v-if="auth.user?.avatar" :src="auth.user.avatar" alt="Фото профиля" @error="auth.setAvatar(null)" />
         <span v-else>{{ auth.user?.firstName?.[0] }}{{ auth.user?.lastName?.[0] }}</span>
       </button>
     </div>

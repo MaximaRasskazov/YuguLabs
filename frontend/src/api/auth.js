@@ -18,4 +18,15 @@ export const authApi = {
 
   changePassword: (currentPassword, newPassword) =>
     http.post('/api/me/password', { current_password: currentPassword, new_password: newPassword }),
+
+  // Аватар профиля. uploadAvatar шлёт multipart (поле «avatar»),
+  // возвращает { avatar_url }. deleteAvatar убирает текущий.
+  uploadAvatar: (file) => {
+    const fd = new FormData()
+    fd.append('avatar', file)
+    return http.post('/api/me/avatar', fd)
+  },
+
+  deleteAvatar: () =>
+    http.delete('/api/me/avatar'),
 }

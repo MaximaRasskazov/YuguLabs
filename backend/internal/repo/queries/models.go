@@ -260,3 +260,10 @@ type User struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 	ExternalID   *string            `json:"external_id"`
 }
+
+type UserAvatar struct {
+	UserID      pgtype.UUID        `json:"user_id"`
+	Content     []byte             `json:"content"`
+	ContentType string             `json:"content_type"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}

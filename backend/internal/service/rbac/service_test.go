@@ -168,3 +168,47 @@ func TestRBAC_AssignRole_UnknownRoleSlug(t *testing.T) {
 	err := svc.AssignRole(context.Background(), admin, target, "no-such-role")
 	require.ErrorIs(t, err, rbac.ErrRoleNotFound)
 }
+
+func TestRBAC_ChangeRole_AtomicSwap(t *testing.T) {
+	// Смена роли одним вызовом: новая выдана, старая снята.
+	store, svc := testRBAC(t)
+	admin := seedUser(t, store, "rbac-chg-admin")
+	target := seedUser(t, store, "rbac-chg-target")
+	attachRole(t, store, admin, "admin")
+	attachRole(t, store, target, "student")
+	ctx := context.Background()
+
+	require.NoError(t, svc.ChangeRole(ctx, admin, target, "student", "teacher"))
+
+	roles, err := store.ListRolesForUser(ctx, pgutil.PgUUID(target))
+	require.NoError(t, err)
+	slugs := make([]string, 0, len(roles))
+	for _, r := range roles {
+		slugs = append(slugs, r.Slug)
+	}
+	require.Contains(t, slugs, "teacher", "новая роль должна быть выдана")
+	require.NotContains(t, slugs, "student", "старая роль должна быть снята")
+}
+
+func TestRBAC_ChangeRole_DeniedKeepsOldRole(t *testing.T) {
+	// Если смена отклонена (privilege escalation) — не должно примениться
+	// НИЧЕГО: старая роль остаётся, новая не добавляется.
+	store, svc := testRBAC(t)
+	dean := seedUser(t, store, "rbac-chg-dean")
+	target := seedUser(t, store, "rbac-chg-keep")
+	attachRole(t, store, dean, "dean")
+	attachRole(t, store, target, "student")
+	ctx := context.Background()
+
+	err := svc.ChangeRole(ctx, dean, target, "student", "admin")
+	require.ErrorIs(t, err, rbac.ErrPrivilegeEscalation)
+
+	roles, err := store.ListRolesForUser(ctx, pgutil.PgUUID(target))
+	require.NoError(t, err)
+	slugs := make([]string, 0, len(roles))
+	for _, r := range roles {
+		slugs = append(slugs, r.Slug)
+	}
+	require.Contains(t, slugs, "student", "при отклонённой смене старая роль остаётся")
+	require.NotContains(t, slugs, "admin")
+}

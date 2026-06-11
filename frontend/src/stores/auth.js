@@ -9,6 +9,7 @@ function normalizeUser(u) {
     lastName:   u.last_name   ?? u.lastName   ?? '',
     middleName: u.middle_name ?? u.middleName ?? '',
     group:      u.group_name  ?? u.group      ?? '',
+    avatar:     u.avatar_url  ?? u.avatar     ?? null,
   }
 }
 
@@ -46,6 +47,14 @@ export const useAuthStore = defineStore('auth', {
       localStorage.removeItem('token')
       localStorage.removeItem('role')
       localStorage.removeItem('user')
+    },
+
+    // Обновляет аватар текущего пользователя (после загрузки/удаления)
+    // и синхронизирует localStorage, чтобы фото не пропадало при перезагрузке.
+    setAvatar(url) {
+      if (!this.user) return
+      this.user = { ...this.user, avatar: url }
+      localStorage.setItem('user', JSON.stringify(this.user))
     },
 
     // Вызывается при старте приложения — восстанавливает сессию из хранилища

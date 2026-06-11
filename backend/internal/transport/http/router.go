@@ -25,8 +25,10 @@ import (
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changerequest"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/debt"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/deploy"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
@@ -62,6 +64,8 @@ type Deps struct {
 	TeacherRequests *teacherrequest.Service
 	Sync            handler.Syncer
 	Users           *user.Service
+	Changelog       *changelog.Service
+	Deploy          *deploy.Service
 }
 
 // NewRouter собирает chi-роутер: middleware → /health → /api/* → /ws/*.
@@ -107,7 +111,13 @@ func NewRouter(d Deps) http.Handler {
 			r.Use(mw.Auth(d.Tokens))
 			r.Patch("/", authH.UpdateMe)
 			r.Post("/password", authH.ChangePassword)
+			r.Post("/avatar", authH.UploadAvatar)
+			r.Delete("/avatar", authH.DeleteAvatar)
 		})
+
+		// Отдача аватара — публично (без auth), чтобы тег <img> мог
+		// загрузить картинку: он не умеет слать Bearer-заголовок.
+		r.Get("/api/users/{id}/avatar", authH.ServeAvatar)
 
 		mountDisciplines(r, d)
 		mountMeDisciplines(r, d)
@@ -122,7 +132,12 @@ func NewRouter(d Deps) http.Handler {
 		mountSync(r, d)
 		mountUsers(r, d)
 		mountDirectory(r, d)
+		mountChangelog(r, d)
 	})
+
+	// Webhook авто-деплоя — вне таймаут-группы (git pull может идти дольше
+	// 30 c), собственный потолок задаёт deploy.Service.
+	mountDeploy(r, d)
 
 	// Swagger UI — без таймаута, статика подаётся напрямую.
 	r.Get("/swagger/*", httpSwagger.Handler(

@@ -72,6 +72,13 @@ type AssignRoleRequest struct {
 	RoleSlug string `json:"role_slug"`
 }
 
+// ChangeRoleRequest — тело POST /api/users/:id/roles/change: атомарная
+// замена роли. FromSlug может быть пустым (у пользователя не было роли).
+type ChangeRoleRequest struct {
+	FromSlug string `json:"from_slug"`
+	ToSlug   string `json:"to_slug"`
+}
+
 // PermissionResponse — представление permission для API.
 type PermissionResponse struct {
 	ID          uuid.UUID `json:"id"`

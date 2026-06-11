@@ -69,6 +69,35 @@ func (h *RBACHandler) AssignRole(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ChangeRole — POST /api/users/:id/roles/change.
+// Атомарно меняет роль (снять from_slug + выдать to_slug в одной транзакции).
+// Заменяет связку AssignRole+RevokeRole двумя запросами с фронта.
+func (h *RBACHandler) ChangeRole(w http.ResponseWriter, r *http.Request) {
+	actorID, ok := mw.UserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "internal", "нет userID в контексте")
+		return
+	}
+
+	targetID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "некорректный UUID пользователя")
+		return
+	}
+
+	var req dto.ChangeRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ToSlug == "" {
+		writeError(w, http.StatusBadRequest, "invalid_body", "поле to_slug обязательно")
+		return
+	}
+
+	if err := h.svc.ChangeRole(r.Context(), actorID, targetID, req.FromSlug, req.ToSlug); err != nil {
+		mapRBACError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // RevokeRole — DELETE /api/users/:id/roles/:slug.
 func (h *RBACHandler) RevokeRole(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := mw.UserID(r.Context())

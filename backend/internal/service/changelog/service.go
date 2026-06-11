@@ -40,6 +40,9 @@ const (
 	ActionHardDeleted     = "hard_deleted"
 	ActionRestored        = "restored"
 	ActionRestoredFromLog = "restored_from_log"
+	// ActionPasswordChanged — смена пароля. before/after пустые: сам пароль
+	// (хеш) в историю принципиально не пишется, фиксируем только факт.
+	ActionPasswordChanged = "password_changed"
 )
 
 type Fields = map[string]any
@@ -90,6 +93,15 @@ func (s *Service) ListForEntity(ctx context.Context, entityType, entityID string
 		EntityID:   entityID,
 		Limit:      limit,
 		Offset:     offset,
+	})
+}
+
+// ListRecent — общий журнал последних изменений (users/roles/permissions)
+// с подтянутым ФИО для user-записей. Для админ-вкладки «Журнал изменений».
+func (s *Service) ListRecent(ctx context.Context, limit, offset int32) ([]queries.ListRecentChangeLogsRow, error) {
+	return s.store.ListRecentChangeLogs(ctx, queries.ListRecentChangeLogsParams{
+		Limit:  limit,
+		Offset: offset,
 	})
 }
 
