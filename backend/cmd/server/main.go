@@ -126,6 +126,7 @@ func run() error {
 	// teacherRequestSvc создаём после notifySvc — он шлёт автору заявки
 	// письмо о решении (approved/rejected).
 	teacherRequestSvc := teacherrequest.New(store, rbacSvc, notifySvc)
+	teacherRequestSvc.SetChangelog(changelogSvc)
 
 	retakeSvc := retake.New(store, auditSvc, changelogSvc, notifySvc)
 	debtSvc := debt.New(store, auditSvc, changelogSvc, disciplineSvc, notifySvc)

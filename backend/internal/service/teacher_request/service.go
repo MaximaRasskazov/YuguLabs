@@ -19,6 +19,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 )
@@ -40,9 +41,10 @@ var (
 )
 
 type Service struct {
-	store  *repo.Store
-	rbac   *rbac.Service
-	notify *notify.Service // опционально — уведомление автору о решении
+	store     *repo.Store
+	rbac      *rbac.Service
+	notify    *notify.Service    // опционально — уведомление автору о решении
+	changelog *changelog.Service // опционально — история смены роли при одобрении
 }
 
 // New собирает Service. notifySvc может быть nil — тогда уведомления о
@@ -50,6 +52,12 @@ type Service struct {
 func New(store *repo.Store, rbacSvc *rbac.Service, notifySvc *notify.Service) *Service {
 	return &Service{store: store, rbac: rbacSvc, notify: notifySvc}
 }
+
+// SetChangelog подключает запись смены роли (student → teacher) при одобрении
+// заявки в change_logs — чтобы она была видна в /api/changelog и
+// /api/users/{id}/story наравне с ручной сменой роли через rbac.ChangeRole,
+// и её можно было откатить через /api/changelog/{id}/restore.
+func (s *Service) SetChangelog(c *changelog.Service) { s.changelog = c }
 
 // notifyDecision шлёт автору заявки уведомление о решении деканата.
 // Best-effort: ошибка только логируется и не откатывает уже совершённую
@@ -173,17 +181,26 @@ func (s *Service) Approve(ctx context.Context, actorID, requestID uuid.UUID, rea
 		// Снимаем роль student: пользователь «переходит» в преподаватели,
 		// а не накапливает роли. Это убирает протекание прошлых
 		// студенческих пересдач/ведомостей в кабинет преподавателя.
-		// DetachRoleFromUser идемпотентен (no-op, если роли нет).
+		// Снимаем только если роль реально была — иначе DetachRoleFromUser
+		// будет no-op, но в changelog ушло бы неверное "before: student".
 		studentRole, txErr := q.GetRoleBySlug(ctx, studentRoleSlug)
 		if txErr != nil {
 			return fmt.Errorf("get student role: %w", txErr)
 		}
-		if txErr = q.DetachRoleFromUser(ctx, queries.DetachRoleFromUserParams{
-			UserID:    pgutil.PgUUID(targetID),
-			RoleID:    studentRole.ID,
-			DeletedBy: pgutil.PgUUID(actorID),
-		}); txErr != nil {
-			return fmt.Errorf("detach student role: %w", txErr)
+		hadStudentRole, txErr := q.HasRole(ctx, queries.HasRoleParams{UserID: pgutil.PgUUID(targetID), Lower: studentRole.Slug})
+		if txErr != nil {
+			return fmt.Errorf("check student role: %w", txErr)
+		}
+		fromSlug, fromName := "", ""
+		if hadStudentRole {
+			fromSlug, fromName = studentRole.Slug, studentRole.Name
+			if txErr = q.DetachRoleFromUser(ctx, queries.DetachRoleFromUserParams{
+				UserID:    pgutil.PgUUID(targetID),
+				RoleID:    studentRole.ID,
+				DeletedBy: pgutil.PgUUID(actorID),
+			}); txErr != nil {
+				return fmt.Errorf("detach student role: %w", txErr)
+			}
 		}
 
 		reqIDStr := requestID.String()
@@ -194,7 +211,18 @@ func (s *Service) Approve(ctx context.Context, actorID, requestID uuid.UUID, rea
 			TargetID:   &reqIDStr,
 			Details:    auditDetails(map[string]any{"role": teacherRoleSlug}),
 		})
-		return txErr
+		if txErr != nil {
+			return txErr
+		}
+
+		// Та же смена роли, что и при ручном /api/users/{id}/roles/change —
+		// одна запись "Роль изменена: Студент → Преподаватель" в истории
+		// пользователя, доступная для просмотра и отката.
+		if s.changelog != nil {
+			targetStr := targetID.String()
+			return s.changelog.LogRoleChangedTx(ctx, q, targetStr, fromSlug, fromName, role.Slug, role.Name, actorID)
+		}
+		return nil
 	}); err != nil {
 		return queries.TeacherRoleRequest{}, err
 	}
