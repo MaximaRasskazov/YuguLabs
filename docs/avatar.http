@@ -1,0 +1,88 @@
+###############################################################################
+# Аватар профиля — сценарий для VS Code REST Client (humao.rest-client).
+#
+# Эндпоинты:
+#   POST   /api/me/avatar          — загрузить (multipart, поле "avatar")
+#   DELETE /api/me/avatar          — удалить свой аватар
+#   GET    /api/users/{id}/avatar  — публичная отдача (для тега <img>)
+#
+# Как пользоваться:
+#   1. Подними стек: APP_PORT=8080 docker compose up -d --build
+#   2. Для шага #2 (успешная загрузка) положи РЯДОМ с этим файлом любую
+#      маленькую картинку JPEG/PNG/WebP и назови её avatar-sample.png
+#      (или поправь путь в строке "< ./avatar-sample.png"). Остальные шаги
+#      работают без файлов на диске.
+#   3. Жми "Send Request" над каждым запросом по порядку.
+#
+# СУТЬ ДЕМО — шаг #3: отправляем обычный ТЕКСТ под именем pic.png с заголовком
+# Content-Type: image/png. Сервер игнорирует имя и заголовок, смотрит на
+# СИГНАТУРУ содержимого (http.DetectContentType) и отвергает файл → 415.
+# Это доказывает: фронтовый фильтр выбора файла — лишь удобство, а настоящая
+# проверка типа живёт на сервере и её нельзя обойти переименованием.
+###############################################################################
+
+@baseUrl    = http://localhost:8080
+@adminEmail = admin@academic.local
+@password   = password
+
+### 1. Логин — access_token подставляется в остальные запросы
+# @name login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "email": "{{adminEmail}}", "password": "{{password}}" }
+
+### 2. Загрузить настоящую картинку → 200 + {"avatar_url": "/api/users/.../avatar?v=..."}
+#      Нужен файл ./avatar-sample.png рядом с этим .http (см. шапку).
+# @name upload
+POST {{baseUrl}}/api/me/avatar
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=----avatar
+
+------avatar
+Content-Disposition: form-data; name="avatar"; filename="avatar-sample.png"
+Content-Type: image/png
+
+< ./avatar-sample.png
+------avatar--
+
+### 3. ГЛАВНОЕ: текст под видом pic.png → 415 avatar_type (проверка по сигнатуре).
+#      Тело — обычный текст; по байтам это не картинка, имя/заголовок не спасают.
+POST {{baseUrl}}/api/me/avatar
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=----avatar
+
+------avatar
+Content-Disposition: form-data; name="avatar"; filename="pic.png"
+Content-Type: image/png
+
+это просто текст, а не картинка — сервер должен отвергнуть по сигнатуре
+------avatar--
+
+### 4. Пустой файл → 400 avatar_empty
+POST {{baseUrl}}/api/me/avatar
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=----avatar
+
+------avatar
+Content-Disposition: form-data; name="avatar"; filename="empty.png"
+Content-Type: image/png
+
+------avatar--
+
+### 5. Публичная отдача аватара — URL берём прямо из ответа #2 → 200, картинка.
+#      avatar_url уже содержит путь /api/users/{id}/avatar?v=<версия>.
+GET {{baseUrl}}{{upload.response.body.$.avatar_url}}
+
+### 6. Удалить свой аватар → 204
+DELETE {{baseUrl}}/api/me/avatar
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### 7. После удаления публичная отдача → 404 avatar_not_found
+GET {{baseUrl}}{{upload.response.body.$.avatar_url}}
+
+###############################################################################
+# Не вошло (трудно без файла-фикстуры на 2 МБ):
+#   • файл > 2 МБ → 413 avatar_too_large — проверено Go-юнит-тестом
+#     TestAuth_SetAvatar_Validation (backend/internal/service/auth/avatar_test.go).
+###############################################################################

@@ -64,6 +64,9 @@ const currentPage = ref(1)
 const savingId = ref(null)
 // Краткое уведомление об успехе/ошибке.
 const toast = ref(null)
+// id пользователей, чьё фото не загрузилось (нет аватара → 404) — для них
+// показываем инициалы. Set реактивен: .add() в @error перерисует ячейку.
+const avatarFailed = ref(new Set())
 
 /* ─── Роли ───────────────────────────────────────────────────── */
 // Слаги ролей совпадают с backend (roles.slug): student/teacher/dean.
@@ -437,6 +440,13 @@ function fmtDateTime(iso) {
                   <div class="user-cell">
                     <div class="u-avatar" :style="{ background: avatarBg(u) }">
                       <span class="u-initials">{{ initials(u) }}</span>
+                      <img
+                        v-if="!avatarFailed.has(u.id)"
+                        class="u-avatar-img"
+                        :src="`/api/users/${u.id}/avatar`"
+                        alt="" loading="lazy"
+                        @error="avatarFailed.add(u.id)"
+                      />
                     </div>
                     <span class="u-name">{{ fullName(u) }}</span>
                   </div>
@@ -721,8 +731,11 @@ function fmtDateTime(iso) {
 .u-avatar {
   width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
+  position: relative; overflow: hidden;
 }
 .u-initials { font: 700 13px/1 'Inter', sans-serif; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.2); }
+/* Фото поверх кружка с инициалами; при 404 (@error) <img> убирается — видны инициалы. */
+.u-avatar-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .u-name { font-weight: 600; color: var(--ink); white-space: nowrap; }
 
 .u-badge { padding: 3px 10px; border-radius: 20px; font: 600 11px/1 'Inter', sans-serif; white-space: nowrap; }
