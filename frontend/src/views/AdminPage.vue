@@ -6,15 +6,42 @@ import http from '../api/http'
 
 const sidebarOpen = ref(false)
 
-// id строки с открытым дропдауном выбора роли (стилизованный, не нативный)
+// id строки с открытым дропдауном выбора роли (стилизованный, не нативный).
+// Меню телепортируется в <body> с position:fixed — иначе его обрезает
+// .table-wrap { overflow:auto } у нижних строк («уходит под блок»).
 const openRoleId = ref(null)
-function toggleRoleDropdown(id) { openRoleId.value = openRoleId.value === id ? null : id }
+const roleMenu   = ref({ top: 0, left: 0, minWidth: 160 }) // координаты fixed-меню
+function toggleRoleDropdown(id, ev) {
+  if (openRoleId.value === id) { openRoleId.value = null; return }
+  const rect = ev.currentTarget.getBoundingClientRect()
+  const estH = ASSIGNABLE_ROLES.length * 40 + 8       // примерная высота меню
+  const openUp = rect.bottom + 4 + estH > window.innerHeight && rect.top - estH - 4 > 0
+  roleMenu.value = {
+    top: openUp ? Math.round(rect.top - estH - 4) : Math.round(rect.bottom + 4),
+    left: Math.round(rect.left),
+    minWidth: Math.round(rect.width),
+  }
+  openRoleId.value = id
+}
 function closeRoleDropdown() { openRoleId.value = null }
 function onAdminOutside(e) {
-  if (!e.target.closest('.role-select-wrap')) openRoleId.value = null
+  // Меню теперь в body — учитываем и его класс, иначе клик по опции «снаружи».
+  if (!e.target.closest('.role-select-wrap') && !e.target.closest('.role-select-dropdown')) {
+    openRoleId.value = null
+  }
 }
-onMounted(() => document.addEventListener('mousedown', onAdminOutside))
-onUnmounted(() => document.removeEventListener('mousedown', onAdminOutside))
+// Скролл/ресайз сдвигают триггер — fixed-меню «отрывается», поэтому закрываем.
+function onAdminReposition() { if (openRoleId.value !== null) openRoleId.value = null }
+onMounted(() => {
+  document.addEventListener('mousedown', onAdminOutside)
+  window.addEventListener('scroll', onAdminReposition, true)
+  window.addEventListener('resize', onAdminReposition)
+})
+onUnmounted(() => {
+  document.removeEventListener('mousedown', onAdminOutside)
+  window.removeEventListener('scroll', onAdminReposition, true)
+  window.removeEventListener('resize', onAdminReposition)
+})
 
 // Выбор роли из стилизованного дропдауна.
 function pickRole(u, slug) {
@@ -427,19 +454,25 @@ function fmtDateTime(iso) {
                       type="button"
                       class="role-select-trigger"
                       :disabled="savingId === u.id || u.role === 'ADMIN'"
-                      @click="toggleRoleDropdown(u.id)"
+                      @click="toggleRoleDropdown(u.id, $event)"
                     >
                       <span>{{ ROLE_LABEL[u.role] ?? u.role }}</span>
                       <svg class="role-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
                     </button>
-                    <div v-if="openRoleId === u.id" class="role-select-dropdown">
-                      <button
-                        v-for="r in ASSIGNABLE_ROLES" :key="r.slug"
-                        type="button" class="role-select-option"
-                        :class="{ selected: u.role === r.slug }"
-                        @click="pickRole(u, r.slug)"
-                      >{{ r.label }}</button>
-                    </div>
+                    <Teleport to="body">
+                      <div
+                        v-if="openRoleId === u.id"
+                        class="role-select-dropdown role-select-dropdown--fixed"
+                        :style="{ top: roleMenu.top + 'px', left: roleMenu.left + 'px', minWidth: roleMenu.minWidth + 'px' }"
+                      >
+                        <button
+                          v-for="r in ASSIGNABLE_ROLES" :key="r.slug"
+                          type="button" class="role-select-option"
+                          :class="{ selected: u.role === r.slug }"
+                          @click="pickRole(u, r.slug)"
+                        >{{ r.label }}</button>
+                      </div>
+                    </Teleport>
                     <span v-if="savingId === u.id" class="select-spinner" />
                   </div>
                 </td>
@@ -714,6 +747,9 @@ function fmtDateTime(iso) {
   background: #fff; border: 1.5px solid var(--line); border-radius: 8px;
   box-shadow: 0 8px 24px -4px rgba(20,22,60,.14); padding: 4px;
 }
+/* Меню телепортировано в body — позиционируется fixed по координатам триггера,
+   чтобы его не обрезал overflow таблицы. top/left/min-width задаются inline. */
+.role-select-dropdown--fixed { position: fixed; z-index: 1000; }
 .role-select-option {
   display: block; width: 100%; text-align: left;
   padding: 9px 12px; border: none; border-radius: 6px;
