@@ -269,6 +269,42 @@ func TestRetake_Start_RequiresEnoughTeachers(t *testing.T) {
 	require.Equal(t, "in_progress", got.Status)
 }
 
+// TestRetake_UpdateSchedule_OnlyScheduled проверяет, что расписание можно
+// править только до начала пересдачи. in_progress / completed / cancelled
+// редактировать нельзя (баг: декан переносил уже идущую пересдачу).
+func TestRetake_UpdateSchedule_OnlyScheduled(t *testing.T) {
+	f := setup(t)
+	teacher := seedUser(t, f.store, "tr-upd")
+	student := seedUser(t, f.store, "st-upd")
+	dean := seedUser(t, f.store, "dean-upd")
+	discID := seedDiscipline(t, f, "UPD", teacher, student)
+
+	newRoom := "303"
+	in := retake.UpdateScheduleInput{Room: &newRoom}
+
+	// scheduled — правка проходит.
+	r := createScheduledRetake(t, f, discID, dean, retake.KindRegular)
+	_, err := f.svc.UpdateSchedule(context.Background(), pgutil.UUID(r.ID), in, dean)
+	require.NoError(t, err)
+
+	// in_progress — правка запрещена.
+	require.NoError(t, f.svc.AddTeacher(context.Background(), pgutil.UUID(r.ID), teacher, dean))
+	require.NoError(t, f.svc.Start(context.Background(), pgutil.UUID(r.ID), dean))
+	_, err = f.svc.UpdateSchedule(context.Background(), pgutil.UUID(r.ID), in, dean)
+	require.ErrorIs(t, err, retake.ErrInvalidStatus)
+
+	// completed — правка запрещена.
+	require.NoError(t, f.svc.Complete(context.Background(), pgutil.UUID(r.ID), dean))
+	_, err = f.svc.UpdateSchedule(context.Background(), pgutil.UUID(r.ID), in, dean)
+	require.ErrorIs(t, err, retake.ErrInvalidStatus)
+
+	// cancelled — правка запрещена.
+	r2 := createScheduledRetake(t, f, discID, dean, retake.KindRegular)
+	require.NoError(t, f.svc.Cancel(context.Background(), pgutil.UUID(r2.ID), dean))
+	_, err = f.svc.UpdateSchedule(context.Background(), pgutil.UUID(r2.ID), in, dean)
+	require.ErrorIs(t, err, retake.ErrInvalidStatus)
+}
+
 // Выставление оценок переехало в пакет statement (двухэтапная
 // ведомость). Тесты grade-flow теперь в internal/service/statement.
 

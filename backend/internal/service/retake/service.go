@@ -192,8 +192,13 @@ func (s *Service) UpdateSchedule(ctx context.Context, id uuid.UUID, in UpdateSch
 	if err != nil {
 		return queries.Retake{}, err
 	}
-	if current.Status == StatusCompleted || current.Status == StatusCancelled {
-		return queries.Retake{}, fmt.Errorf("%w: пересдача завершена или отменена", ErrInvalidStatus)
+	// Править расписание можно только пока пересдача ещё не началась.
+	// Уже идущую (in_progress), завершённую (completed) или отменённую
+	// (cancelled) переносить нельзя: студенты/преподаватели уже на месте
+	// или событие закрыто. Симметрично работе с участниками (AddStudent
+	// и т.п.), которые тоже допустимы лишь в scheduled.
+	if current.Status != StatusScheduled {
+		return queries.Retake{}, fmt.Errorf("%w: править расписание можно только до начала пересдачи (статус scheduled)", ErrInvalidStatus)
 	}
 	if in.DurationMinutes != nil && *in.DurationMinutes <= 0 {
 		return queries.Retake{}, fmt.Errorf("%w: duration_minutes должна быть положительной", ErrInvalidInput)
