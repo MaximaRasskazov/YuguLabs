@@ -19,3 +19,6 @@ Thumbs.db
 # Build caches / stray lockfiles
 frontend/.vite/
 /package-lock.json
+
+# Local notes
+TEST_ACCOUNTS.md

@@ -250,7 +250,7 @@ make reset         # полный сброс с подтверждением (vo
 │       ├── views/            # страницы по ролям (Student/Teacher/Dean/Admin …)
 │       ├── components/       # переиспользуемые компоненты
 │       └── stores/           # Pinia (auth, notifications, toasts)
-├── docs/                     # проектная документация (notifications.md …)
+├── docs/                     # проектная документация
 ├── docker-compose.yml        # dev-стек (postgres + mailpit + backend)
 ├── docker-compose.prod.yml   # прод-стек (GHCR-образы + Caddy)
 ├── Caddyfile                 # TLS + reverse-proxy для прода
@@ -355,6 +355,6 @@ flowchart LR
 
 <div align="center">
 
-Сделано с ❤️ командой проекта · [Backend docs](backend/README.md) · [Frontend docs](frontend/README.md) · [Notifications](docs/notifications.md)
+Сделано с ❤️ командой проекта · [Backend docs](backend/README.md) · [Frontend docs](frontend/README.md)
 
 </div>
