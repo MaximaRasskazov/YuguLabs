@@ -81,7 +81,10 @@ type Step struct {
 // Result — итог успешного деплоя.
 type Result struct {
 	Branch string
-	Steps  []Step
+	// Warnings — нефатальные предупреждения (например, обнаруженное «грязное»
+	// рабочее дерево, чьи правки были отброшены). Уходят в JSON-ответ.
+	Warnings []string
+	Steps    []Step
 }
 
 // Deploy выполняет последовательность git-команд под блокировкой.
@@ -110,6 +113,8 @@ func (s *Service) Deploy(ctx context.Context, clientIP string) (Result, error) {
 	defer cancel()
 
 	res := Result{Branch: s.cfg.Branch}
+	// Preflight: фиксируем «грязное» рабочее дерево ДО разрушительных команд.
+	res.Warnings = s.prepareWorktree(ctx, clientIP)
 	for _, c := range DeployCommands(s.cfg.Branch) {
 		out, err := s.runner.Run(ctx, s.cfg.RepoPath, c)
 		out = strings.TrimSpace(out)
@@ -129,6 +134,41 @@ func (s *Service) Deploy(ctx context.Context, clientIP string) (Result, error) {
 
 	s.rec.Record(Entry{IP: clientIP, Stage: StageFinished, Status: StatusSuccess})
 	return res, nil
+}
+
+// prepareWorktree проверяет рабочее дерево перед основными командами и
+// готовит его к чистому pull. Если есть незакоммиченные/неотслеживаемые
+// изменения — фиксирует warning (в журнал и в ответ): мы НЕ stash-им и не
+// коммитим их (на сервере локальные правки случайны или подозрительны), а
+// `git clean -fd` убирает неотслеживаемые файлы. Отслеживаемые правки
+// отбросит обязательный `git reset --hard HEAD`. `git clean` без `-x` НЕ
+// трогает gitignored-файлы (например, .env).
+//
+// Это прямой ответ на типичный вопрос на защите: «а если на сервере есть
+// незакоммиченные изменения?» — мы их обнаруживаем, логируем и зачищаем.
+func (s *Service) prepareWorktree(ctx context.Context, clientIP string) []string {
+	statusCmd := Command{Name: "git", Args: []string{"status", "--porcelain", "--untracked-files=all"}}
+	out, err := s.runner.Run(ctx, s.cfg.RepoPath, statusCmd)
+	out = strings.TrimSpace(out)
+	if err != nil || out == "" {
+		return nil // дерево чистое (или статус недоступен) — готовить нечего
+	}
+
+	warning := "рабочее дерево содержит локальные изменения — они будут отброшены (reset --hard + clean)"
+	s.rec.Record(Entry{IP: clientIP, Stage: StagePreflight, Status: StatusWarning, Detail: warning + "\n" + out})
+
+	cleanCmd := Command{Name: "git", Args: []string{"clean", "-fd"}}
+	cleanOut, cleanErr := s.runner.Run(ctx, s.cfg.RepoPath, cleanCmd)
+	if cleanErr != nil {
+		// Ошибка очистки не валит деплой: обязательный reset --hard всё равно
+		// приведёт отслеживаемые файлы в порядок.
+		s.rec.Record(Entry{IP: clientIP, Stage: StageCommand, Command: cleanCmd.String(),
+			Status: StatusError, Detail: joinErr(strings.TrimSpace(cleanOut), cleanErr)})
+	} else {
+		s.rec.Record(Entry{IP: clientIP, Stage: StageCommand, Command: cleanCmd.String(),
+			Status: StatusSuccess, Detail: strings.TrimSpace(cleanOut)})
+	}
+	return []string{warning}
 }
 
 // ensureGitRepo проверяет, что каталог — git-репозиторий. .git может быть

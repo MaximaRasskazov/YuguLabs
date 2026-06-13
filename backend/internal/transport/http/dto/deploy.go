@@ -10,10 +10,13 @@ type DeployStep struct {
 
 // DeployResponse — успешный JSON-ответ webhook авто-деплоя.
 type DeployResponse struct {
-	Status  string       `json:"status"`
-	Message string       `json:"message"`
-	Branch  string       `json:"branch"`
-	Steps   []DeployStep `json:"steps"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	Branch  string `json:"branch"`
+	// Warnings — нефатальные предупреждения (например, «грязное» рабочее
+	// дерево, чьи правки отброшены). Пусто — поле опускается.
+	Warnings []string     `json:"warnings,omitempty"`
+	Steps    []DeployStep `json:"steps"`
 }
 
 // FromDeployResult маппит результат сервиса деплоя в JSON-ответ.
@@ -23,9 +26,10 @@ func FromDeployResult(r deploy.Result) DeployResponse {
 		steps = append(steps, DeployStep{Command: s.Command, Output: s.Output})
 	}
 	return DeployResponse{
-		Status:  "success",
-		Message: "Deployment completed",
-		Branch:  r.Branch,
-		Steps:   steps,
+		Status:   "success",
+		Message:  "Deployment completed",
+		Branch:   r.Branch,
+		Warnings: r.Warnings,
+		Steps:    steps,
 	}
 }

@@ -216,3 +216,45 @@ func TestRestore_RoleDoubleIsNoop(t *testing.T) {
 	// …повторный откат той же записи — уже нечего снимать.
 	require.ErrorIs(t, svc.RestoreFromLog(ctx, logID, actor), changelog.ErrRestoreNoop)
 }
+
+// TestRestore_RoleChangedDoubleIsNoop — точный кейс из бага: повторный откат
+// записи о СМЕНЕ роли (role_changed) после того, как состояние уже целевое,
+// возвращает ErrRestoreNoop и НЕ создаёт пустую restored_from_log-запись.
+func TestRestore_RoleChangedDoubleIsNoop(t *testing.T) {
+	s := testStore(t)
+	svc := changelog.New(s)
+	ctx := context.Background()
+
+	u := seedNamedUser(t, s, "Повтор", "Смены")
+	actor := pgutil.UUID(u.ID)
+	uid := actor.String()
+
+	teacher, err := s.GetRoleBySlug(ctx, "teacher")
+	require.NoError(t, err)
+	dean, err := s.GetRoleBySlug(ctx, "dean")
+	require.NoError(t, err)
+
+	require.NoError(t, s.RunInTx(ctx, func(q *queries.Queries) error {
+		if _, err := q.AttachRoleToUser(ctx, queries.AttachRoleToUserParams{
+			UserID: u.ID, RoleID: dean.ID, CreatedBy: u.ID,
+		}); err != nil {
+			return err
+		}
+		return svc.LogRoleChangedTx(ctx, q, uid, teacher.Slug, teacher.Name, dean.Slug, dean.Name, actor)
+	}))
+
+	rows, err := svc.ListForEntity(ctx, changelog.EntityUser, uid, 50, 0)
+	require.NoError(t, err)
+	logID := rows[0].ID
+
+	// Первый откат применяется и пишет restored_from_log.
+	require.NoError(t, svc.RestoreFromLog(ctx, logID, actor))
+	after1, err := svc.ListForEntity(ctx, changelog.EntityUser, uid, 50, 0)
+	require.NoError(t, err)
+
+	// Повторный откат: состояние уже целевое → noop без записи в лог.
+	require.ErrorIs(t, svc.RestoreFromLog(ctx, logID, actor), changelog.ErrRestoreNoop)
+	after2, err := svc.ListForEntity(ctx, changelog.EntityUser, uid, 50, 0)
+	require.NoError(t, err)
+	require.Equal(t, len(after1), len(after2), "повторный (пустой) откат не должен добавлять записи в лог")
+}

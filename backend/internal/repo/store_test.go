@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
@@ -58,6 +59,52 @@ func newUserParams(email string) queries.CreateUserParams {
 		FirstName:    "Test",
 		LastName:     "User",
 	}
+}
+
+// systemUUID — служебный пользователь (created_by для sync-операций).
+var systemUUID = pgtype.UUID{Bytes: uuid.MustParse("00000000-0000-0000-0000-000000000000"), Valid: true}
+
+func activeRoleSlugs(t *testing.T, s *repo.Store, uid pgtype.UUID) []string {
+	t.Helper()
+	roles, err := s.ListRolesForUser(context.Background(), uid)
+	require.NoError(t, err)
+	out := make([]string, 0, len(roles))
+	for _, r := range roles {
+		out = append(out, r.Slug)
+	}
+	return out
+}
+
+// TestAssignRoleFromSync_FirstImportOnly проверяет, что sync назначает роль
+// из эмулятора только при первом импорте (когда активной роли ещё нет) и НЕ
+// перетирает роль, установленную вручную. Без этого ломался откат смены роли:
+// sync возвращал бы роль эмулятора после каждого undo.
+func TestAssignRoleFromSync_FirstImportOnly(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	u, err := s.CreateUser(ctx, newUserParams(uniqueEmail("syncrole")))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = repo.CleanupUser(ctx, s.Pool(), u.ID) })
+
+	// 1. Первый импорт: ролей нет → роль назначается.
+	require.NoError(t, s.AssignRoleFromSync(ctx, u.ID, systemUUID, "student"))
+	require.ElementsMatch(t, []string{"student"}, activeRoleSlugs(t, s, u.ID))
+
+	// 2. Повторный sync с ДРУГОЙ ролью эмулятора: активная роль уже есть →
+	//    sync НЕ трогает (ручное управление авторитетно).
+	require.NoError(t, s.AssignRoleFromSync(ctx, u.ID, systemUUID, "teacher"))
+	require.ElementsMatch(t, []string{"student"}, activeRoleSlugs(t, s, u.ID),
+		"sync не должен переутверждать роль, если у пользователя уже есть активная")
+
+	// 3. Если активной роли не осталось — sync снова сеет роль.
+	student, err := s.GetRoleBySlug(ctx, "student")
+	require.NoError(t, err)
+	require.NoError(t, s.DetachRoleFromUser(ctx, queries.DetachRoleFromUserParams{
+		UserID: u.ID, RoleID: student.ID, DeletedBy: systemUUID,
+	}))
+	require.NoError(t, s.AssignRoleFromSync(ctx, u.ID, systemUUID, "teacher"))
+	require.ElementsMatch(t, []string{"teacher"}, activeRoleSlugs(t, s, u.ID))
 }
 
 func TestStore_RunInTx_CommitsOnSuccess(t *testing.T) {

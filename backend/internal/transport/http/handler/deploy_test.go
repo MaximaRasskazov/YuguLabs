@@ -17,9 +17,13 @@ import (
 const webhookSecret = "test-secret-key-do-not-use-in-prod"
 
 // stubRunner имитирует git без настоящего git: успех на любую команду.
+// На `git status` отдаёт пусто — чистое рабочее дерево (preflight без clean).
 type stubRunner struct{}
 
-func (stubRunner) Run(_ context.Context, _ string, _ deploy.Command) (string, error) {
+func (stubRunner) Run(_ context.Context, _ string, c deploy.Command) (string, error) {
+	if strings.HasPrefix(c.String(), "git status") {
+		return "", nil
+	}
 	return "ok", nil
 }
 

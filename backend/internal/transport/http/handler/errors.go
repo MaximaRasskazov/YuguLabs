@@ -55,14 +55,6 @@ func mapAuthError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnauthorized, "invalid_password", "неверный текущий пароль")
 	case errors.Is(err, auth.ErrSamePassword):
 		writeError(w, http.StatusBadRequest, "same_password", "новый пароль совпадает с текущим")
-	case errors.Is(err, auth.ErrAvatarEmpty):
-		writeError(w, http.StatusBadRequest, "avatar_empty", "файл аватара пуст")
-	case errors.Is(err, auth.ErrAvatarTooLarge):
-		writeError(w, http.StatusRequestEntityTooLarge, "avatar_too_large", "файл слишком большой (макс 2 МБ)")
-	case errors.Is(err, auth.ErrAvatarType):
-		writeError(w, http.StatusUnsupportedMediaType, "avatar_type", "недопустимый тип файла (нужен JPEG, PNG или WebP)")
-	case errors.Is(err, auth.ErrAvatarNotFound):
-		writeError(w, http.StatusNotFound, "avatar_not_found", "аватар не найден")
 	case errors.Is(err, token.ErrRefreshNotFound),
 		errors.Is(err, token.ErrRefreshExhausted),
 		errors.Is(err, token.ErrRefreshReplay):

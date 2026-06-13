@@ -34,6 +34,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/deploy"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/photo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
@@ -92,10 +93,18 @@ func run() error {
 	// История мутаций users/roles: auth и rbac пишут в change_logs.
 	authSvc.SetChangelog(changelogSvc)
 	rbacSvc.SetChangelog(changelogSvc)
+	// Фотографии профиля (лаба «загрузка файлов»): сжатый оригинал + аватар
+	// 128×128 в БД, защищённое скачивание, админский ZIP+Excel-архив.
+	// Действия с фото логируются в change_logs.
+	photoSvc := photo.New(store)
+	photoSvc.SetChangelog(changelogSvc)
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
 	reportSvc := report.New(store)
 
 	usersSvc := usersvc.New(store)
+	// Админская правка профиля (PATCH /api/users/{id}) пишется в change_logs
+	// с автором-администратором.
+	usersSvc.SetChangelog(changelogSvc)
 
 	// Webhook авто-деплоя (лаба №6). Без БД: запускает git-команды в
 	// GIT_REPO_PATH под in-process блокировкой и пишет журнал деплоя.
@@ -215,6 +224,7 @@ func run() error {
 		Users:           usersSvc,
 		Changelog:       changelogSvc,
 		Deploy:          deploySvc,
+		Photos:          photoSvc,
 	})
 
 	srv := &http.Server{

@@ -1,8 +1,9 @@
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import http from '../api/http'
+import { saveBlob, filenameFromDisposition } from '../utils/download'
 
 const sidebarOpen = ref(false)
 
@@ -202,6 +203,53 @@ function fullName(u) {
   return [u.lastName, u.firstName, u.middleName].filter(Boolean).join(' ')
 }
 
+/* ─── Правка данных пользователя (админ) ─────────────────────── */
+// PATCH /api/users/{id}: правка ФИО/группы. Логируется на бэке в change_logs
+// с автором-администратором — изменение видно в «Истории» и откатываемо.
+const editOpen   = ref(false)
+const editUser   = ref(null)
+const editSaving = ref(false)
+const editForm   = reactive({ lastName: '', firstName: '', middleName: '', group: '' })
+
+function openEdit(u) {
+  editUser.value   = u
+  editForm.lastName   = u.lastName   ?? ''
+  editForm.firstName  = u.firstName  ?? ''
+  editForm.middleName = u.middleName ?? ''
+  editForm.group      = u.group      ?? ''
+  editOpen.value = true
+}
+function closeEdit() { editOpen.value = false; editUser.value = null }
+
+async function saveEdit() {
+  if (!editForm.firstName.trim() || !editForm.lastName.trim()) {
+    showToast('err', 'Имя и фамилия обязательны')
+    return
+  }
+  editSaving.value = true
+  try {
+    const { data } = await http.patch(`/api/users/${editUser.value.id}`, {
+      first_name:  editForm.firstName.trim(),
+      last_name:   editForm.lastName.trim(),
+      middle_name: editForm.middleName.trim(),
+      group_name:  editForm.group.trim(),
+    })
+    const row = users.value.find((x) => x.id === editUser.value.id)
+    if (row) {
+      row.lastName   = data.last_name   ?? ''
+      row.firstName  = data.first_name  ?? ''
+      row.middleName = data.middle_name ?? ''
+      row.group      = data.group_name  ?? null
+    }
+    showToast('ok', `Данные обновлены: ${fullName(editForm)}`)
+    closeEdit()
+  } catch (e) {
+    showToast('err', e.response?.data?.message || 'Не удалось обновить данные')
+  } finally {
+    editSaving.value = false
+  }
+}
+
 const AVATAR_PALETTE = [
   '#3b3fe0','#e63c5a','#f59e0b','#10b981',
   '#8b3df0','#0ea5e9','#ec4899','#14b8a6',
@@ -264,6 +312,41 @@ function closeHistory() { historyUser.value = null; historyEntries.value = [] }
 //   title   — действие, для ролей сразу с названием («Выдана роль «Деканат»»);
 //   details — только понятные поля профиля (old→new), без технических ключей;
 //   subject — ФИО затронутого пользователя (в журнале).
+// currentFieldValue возвращает текущее значение поля у пользователя, чью
+// историю мы смотрим (historyUser). Нужно, чтобы понять, в силе ли ещё
+// изменение. Несопоставимые поля (role_name, технические) → undefined.
+function currentFieldValue(field) {
+  const u = historyUser.value
+  if (!u) return undefined
+  switch (field) {
+    case 'role_slug':   return (u.role ?? '').toLowerCase()
+    case 'first_name':  return u.firstName ?? ''
+    case 'last_name':   return u.lastName ?? ''
+    case 'middle_name': return u.middleName ?? ''
+    case 'group_name':  return u.group ?? ''
+    default:            return undefined
+  }
+}
+
+// entryStillInEffect сообщает, имеет ли смысл откат записи: true, если текущее
+// состояние всё ещё совпадает с «new» этой записи (изменение в силе). Это
+// вычисляется из АКТУАЛЬНЫХ данных пользователя, поэтому корректно и после
+// перезагрузки страницы (когда сессионный restoredIds потерян): уже
+// откаченная запись не предложит кнопку повторно. Если сопоставимых полей нет
+// — оставляем кнопку (бэкенд всё равно безопасно вернёт restore_noop).
+function entryStillInEffect(cf) {
+  let sawComparable = false
+  for (const [field, ch] of Object.entries(cf)) {
+    const cur = currentFieldValue(field)
+    if (cur === undefined) continue
+    const newVal = ch?.new
+    if (newVal === null || newVal === undefined || newVal === '') continue
+    sawComparable = true
+    if (String(cur) === String(newVal)) return true
+  }
+  return !sawComparable
+}
+
 function describeEntry(e) {
   const cf = e.changed_fields || {}
   let title = ACTION_LABEL[e.action] ?? e.action
@@ -293,7 +376,10 @@ function describeEntry(e) {
     title,
     at: e.created_at,
     details,
-    restorable: RESTORABLE.has(e.action),
+    // Откатываемо, только если действие в принципе поддерживает откат И
+    // изменение всё ещё в силе (иначе кнопка повторного «пустого» отката не
+    // показывается — устранён баг с её появлением после перезагрузки).
+    restorable: RESTORABLE.has(e.action) && entryStillInEffect(cf),
     subject: e.subject || '',
   }
 }
@@ -304,21 +390,24 @@ async function restoreEntry(entry) {
     await http.post(`/api/changelog/${entry.id}/restore`)
     restoredIds.value.add(entry.id) // кнопка станет бейджем «Откат выполнен»
     showToast('ok', 'Откат выполнен')
-    // Обновляем и историю (появится запись об откате), и список (роль/профиль).
-    await Promise.all([openHistory(historyUser.value), fetchUsers()])
+    // Сначала обновляем список, затем берём СВЕЖИЙ объект пользователя и
+    // перезагружаем историю — чтобы restorable пересчитался по актуальному
+    // состоянию (роль/профиль уже изменились).
+    await fetchUsers()
+    const fresh = users.value.find((u) => u.id === historyUser.value?.id)
+    if (fresh) historyUser.value = fresh
+    await openHistory(historyUser.value)
   } catch (e) {
     const code = e.response?.data?.error
+    // Бэкенд присылает информативное сообщение — показываем его как есть.
+    const serverMsg = e.response?.data?.message
     if (code === 'restore_noop') {
       // Состояние уже соответствует записи — это не ошибка, просто гасим кнопку.
       restoredIds.value.add(entry.id)
-      showToast('ok', 'Откат уже выполнен')
+      showToast('ok', serverMsg || 'Откат уже выполнен')
       return
     }
-    const msg = code === 'restore_unsupported' ? 'Откат для этой записи не поддержан'
-      : code === 'log_not_found' ? 'Запись не найдена'
-      : e.response?.status === 403 ? 'Нет права на откат'
-      : 'Не удалось выполнить откат'
-    showToast('err', msg)
+    showToast('err', serverMsg || 'Не удалось выполнить откат')
   } finally {
     restoringId.value = null
   }
@@ -345,6 +434,23 @@ async function openJournal() {
 }
 function closeJournal() { journalOpen.value = false; journalEntries.value = [] }
 
+/* ─── Архив фотографий (ZIP + Excel-реестр) ──────────────────── */
+const archiving = ref(false)
+async function downloadArchive() {
+  if (archiving.value) return
+  archiving.value = true
+  try {
+    const resp = await http.post('/api/photo/archive', null, { responseType: 'blob' })
+    const name = filenameFromDisposition(resp.headers['content-disposition'], 'user-photos.zip')
+    saveBlob(resp.data, name)
+    showToast('ok', 'Архив фотографий скачан')
+  } catch (e) {
+    showToast('err', e.response?.status === 403 ? 'Нет права на выгрузку архива' : 'Не удалось собрать архив')
+  } finally {
+    archiving.value = false
+  }
+}
+
 function formatVal(v) {
   return (v === null || v === undefined || v === '') ? '—' : String(v)
 }
@@ -369,12 +475,20 @@ function fmtDateTime(iso) {
           <h1 class="page-title">Управление ролями</h1>
           <span v-if="total > 0" class="total-chip">{{ total }} в системе</span>
         </div>
-        <button class="journal-btn" @click="openJournal" title="Последние изменения по всем">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3 2"/>
-          </svg>
-          Журнал изменений
-        </button>
+        <div class="page-bar-actions">
+          <button class="journal-btn" @click="downloadArchive" :disabled="archiving" title="ZIP всех фотографий + Excel-реестр">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>
+            </svg>
+            {{ archiving ? 'Готовим…' : 'Архив фото' }}
+          </button>
+          <button class="journal-btn" @click="openJournal" title="Последние изменения по всем">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3 2"/>
+            </svg>
+            Журнал изменений
+          </button>
+        </div>
       </div>
 
       <!-- ── Фильтры ── -->
@@ -431,7 +545,7 @@ function fmtDateTime(iso) {
                 <th>Группа</th>
                 <th>Текущая роль</th>
                 <th>Изменить роль</th>
-                <th>История</th>
+                <th>Действия</th>
               </tr>
             </thead>
             <tbody>
@@ -487,12 +601,20 @@ function fmtDateTime(iso) {
                   </div>
                 </td>
                 <td>
-                  <button type="button" class="hist-btn" title="История изменений" @click="openHistory(u)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3 2"/>
-                    </svg>
-                    История
-                  </button>
+                  <div class="row-actions">
+                    <button type="button" class="hist-btn" title="Изменить ФИО / группу" @click="openEdit(u)">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>
+                      </svg>
+                      Изменить
+                    </button>
+                    <button type="button" class="hist-btn" title="История изменений" @click="openHistory(u)">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3 2"/>
+                      </svg>
+                      История
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>
@@ -613,6 +735,37 @@ function fmtDateTime(iso) {
                 </div>
               </li>
             </ul>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- ── Правка данных пользователя (админ) ── -->
+    <Transition name="modal">
+      <div v-if="editOpen" class="modal-overlay" @click.self="closeEdit">
+        <div class="modal-card modal-card--narrow">
+          <div class="modal-head">
+            <div class="modal-head-text">
+              <h3 class="modal-title">Изменить данные</h3>
+              <span class="modal-sub">{{ editUser?.email }}</span>
+            </div>
+            <button class="modal-close" @click="closeEdit" aria-label="Закрыть">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <div class="edit-grid">
+              <label class="edit-field"><span>Фамилия</span><input class="edit-input" v-model="editForm.lastName" placeholder="Фамилия" /></label>
+              <label class="edit-field"><span>Имя</span><input class="edit-input" v-model="editForm.firstName" placeholder="Имя" /></label>
+              <label class="edit-field"><span>Отчество</span><input class="edit-input" v-model="editForm.middleName" placeholder="—" /></label>
+              <label class="edit-field"><span>Группа</span><input class="edit-input" v-model="editForm.group" placeholder="Напр. ИВТ-21" /></label>
+            </div>
+          </div>
+          <div class="edit-foot">
+            <button class="edit-btn-cancel" @click="closeEdit">Отмена</button>
+            <button class="edit-btn-save" :disabled="editSaving" @click="saveEdit">
+              {{ editSaving ? 'Сохранение…' : 'Сохранить' }}
+            </button>
           </div>
         </div>
       </div>
@@ -834,15 +987,16 @@ function fmtDateTime(iso) {
 .hist-btn svg { width: 14px; height: 14px; }
 
 /* ── Кнопка «Журнал изменений» в шапке ── */
+.page-bar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 .journal-btn {
-  margin-left: auto;
   display: inline-flex; align-items: center; gap: 7px;
   height: 36px; padding: 0 14px; border-radius: 9px;
   border: 1.5px solid var(--brand); background: rgba(59,63,224,.06); color: var(--brand);
   font: 600 13px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap;
   transition: background .15s;
 }
-.journal-btn:hover { background: rgba(59,63,224,.12); }
+.journal-btn:hover:not(:disabled) { background: rgba(59,63,224,.12); }
+.journal-btn:disabled { opacity: .6; cursor: default; }
 .journal-btn svg { width: 15px; height: 15px; }
 .hist-subject { margin-top: 5px; font: 600 13px/1.3 'Inter', sans-serif; color: var(--ink); }
 
@@ -920,10 +1074,37 @@ function fmtDateTime(iso) {
 .modal-enter-active .modal-card, .modal-leave-active .modal-card { transition: transform .2s var(--ease); }
 .modal-enter-from .modal-card, .modal-leave-to .modal-card { transform: translateY(12px); }
 
+/* ── Действия в строке + модалка правки ── */
+.row-actions { display: flex; gap: 8px; }
+.modal-card--narrow { max-width: 440px; }
+.edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.edit-field { display: flex; flex-direction: column; gap: 6px; font: 500 12px/1 'Inter', sans-serif; color: var(--ink-soft); }
+.edit-input {
+  height: 40px; box-sizing: border-box; border: 1.5px solid var(--line); border-radius: 8px;
+  padding: 0 12px; font: 13px/1 'Inter', sans-serif; color: var(--ink); background: #fff;
+  outline: none; transition: border-color .15s, box-shadow .15s;
+}
+.edit-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(59,63,224,.1); }
+.edit-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); }
+.edit-btn-cancel {
+  height: 40px; padding: 0 16px; border: 1.5px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--ink-soft); font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.edit-btn-cancel:hover { border-color: var(--brand); color: var(--brand); }
+.edit-btn-save {
+  height: 40px; padding: 0 20px; border: 1.5px solid var(--brand); border-radius: 8px;
+  background: var(--brand); color: #fff; font: 600 13px/1 'Inter', sans-serif; cursor: pointer;
+  transition: background .15s;
+}
+.edit-btn-save:hover:not(:disabled) { background: var(--brand-ink); }
+.edit-btn-save:disabled { opacity: .5; cursor: not-allowed; }
+
 /* ── Responsive ── */
 @media (max-width: 600px) {
   .page-bar, .filters-bar, .results-bar, .pagination { padding-left: 16px; padding-right: 16px; }
   .table-card { margin-left: 16px; margin-right: 16px; }
   .search-wrap { max-width: 100%; }
+  .edit-grid { grid-template-columns: 1fr; }
 }
 </style>

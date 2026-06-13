@@ -48,6 +48,15 @@ func mountRBAC(r chi.Router, d Deps) {
 		r.Get("/roles", h.ListUserRoles)
 		r.Get("/permissions", h.ListUserPermissions)
 
+		// Админская правка профиля пользователя (ФИО/группа) — логируется.
+		// Регистрируем в этом же {id}-поддереве, чтобы не плодить второй
+		// chi-узел для /api/users/{id}.
+		if d.Users != nil {
+			uh := handler.NewUsersHandler(d.Users)
+			r.With(mw.RequirePermission(d.RBAC, "users.update")).
+				Patch("/", uh.Update)
+		}
+
 		r.With(mw.RequirePermission(d.RBAC, "roles.assign")).
 			Post("/roles", h.AssignRole)
 		r.With(mw.RequirePermission(d.RBAC, "roles.assign")).

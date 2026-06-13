@@ -285,8 +285,15 @@ func (s *Store) GetDisciplineIDByExternalID(ctx context.Context, externalID stri
 	return id, nil
 }
 
-// AssignRoleFromSync назначает роль пользователю по slug, если не назначена.
-// Идемпотентно: повторный вызов не меняет состояние.
+// AssignRoleFromSync назначает роль из эмулятора ТОЛЬКО при первом импорте —
+// когда у пользователя ещё нет НИ ОДНОЙ активной роли. Если роль уже есть
+// (в т.ч. изменённая вручную администратором), sync её НЕ трогает.
+//
+// Почему так: иначе sync переутверждал бы роль из эмулятора на каждом цикле и
+// перетирал ручные изменения ролей и их откаты (admin сделал student→teacher
+// или откатил — а sync через 5 минут возвращал бы роль эмулятора). Правило
+// «sync сеет начальную роль, дальше роли ведёт администратор» делает ручное
+// управление авторитетным и устраняет «прыгающую» роль.
 func (s *Store) AssignRoleFromSync(ctx context.Context, userID, systemUserID pgtype.UUID, roleSlug string) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO role_user (user_id, role_id, created_by)
@@ -295,7 +302,7 @@ func (s *Store) AssignRoleFromSync(ctx context.Context, userID, systemUserID pgt
 		WHERE r.slug = $3 AND r.deleted_at IS NULL
 		  AND NOT EXISTS (
 		    SELECT 1 FROM role_user ru
-		    WHERE ru.user_id = $1 AND ru.role_id = r.id AND ru.deleted_at IS NULL
+		    WHERE ru.user_id = $1 AND ru.deleted_at IS NULL
 		  )
 	`, userID, systemUserID, roleSlug)
 	if err != nil {

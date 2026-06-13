@@ -261,9 +261,20 @@ type User struct {
 	ExternalID   *string            `json:"external_id"`
 }
 
-type UserAvatar struct {
-	UserID      pgtype.UUID        `json:"user_id"`
-	Content     []byte             `json:"content"`
-	ContentType string             `json:"content_type"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+type UserPhoto struct {
+	ID                  int64              `json:"id"`
+	UserID              pgtype.UUID        `json:"user_id"`
+	OriginalName        string             `json:"original_name"`
+	Description         *string            `json:"description"`
+	Format              string             `json:"format"`
+	SizeBytes           int32              `json:"size_bytes"`
+	Width               int32              `json:"width"`
+	Height              int32              `json:"height"`
+	OriginalContent     []byte             `json:"original_content"`
+	OriginalContentType string             `json:"original_content_type"`
+	AvatarContent       []byte             `json:"avatar_content"`
+	AvatarContentType   string             `json:"avatar_content_type"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt           pgtype.Timestamptz `json:"deleted_at"`
 }

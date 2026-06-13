@@ -8,18 +8,23 @@ import (
 
 // mountDeploy регистрирует webhook авто-деплоя (лаба №6).
 //
-//	POST /api/hooks/git — открыт без авторизации, защищён secret_key.
+//	POST /api/hooks/git — основной путь (через него ходит обратный прокси,
+//	                      проксирующий на бэкенд только /api/*).
+//	POST /hooks/git     — литеральный путь из ТЗ (для прямого обращения к
+//	                      бэкенду, как в методичке). Тот же обработчик.
 //
-// Маршрут сгруппирован под префиксом /api/hooks (требование ТЗ о группировке
-// по hooks) и намеренно вынесен ВНЕ 30-секундного таймаута — как ws/swagger:
-// git pull может идти дольше. Собственный потолок времени задаёт сам
-// deploy.Service (GIT_DEPLOY_TIMEOUT).
+// Оба сгруппированы под префиксом hooks (требование ТЗ о группировке) и
+// намеренно вынесены ВНЕ 30-секундного таймаута — как ws/swagger: git pull
+// может идти дольше. Собственный потолок времени задаёт сам deploy.Service
+// (GIT_DEPLOY_TIMEOUT).
 func mountDeploy(r chi.Router, d Deps) {
 	if d.Deploy == nil {
 		return
 	}
 	h := handler.NewGitWebhookHandler(d.Cfg.GitWebhookSecret, d.Deploy)
-	r.Route("/api/hooks", func(r chi.Router) {
-		r.Post("/git", h.Handle)
-	})
+	for _, prefix := range []string{"/api/hooks", "/hooks"} {
+		r.Route(prefix, func(r chi.Router) {
+			r.Post("/git", h.Handle)
+		})
+	}
 }

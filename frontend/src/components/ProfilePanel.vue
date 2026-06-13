@@ -121,7 +121,8 @@ const fullName = computed(() =>
 const fileInput = ref(null)
 const avatarLoading = ref(false)
 const avatarError = ref('')
-const MAX_AVATAR = 2 * 1024 * 1024 // 2 МБ — синхронно с бэкендом
+// Бэкенд сам сжимает/уменьшает большие снимки (до 4K), лимит щедрый — 16 МБ.
+const MAX_AVATAR = 16 * 1024 * 1024
 const ALLOWED_AVATAR = ['image/jpeg', 'image/png', 'image/webp']
 
 function pickAvatar() {
@@ -133,13 +134,13 @@ async function onAvatarPicked(e) {
   e.target.value = '' // сброс — чтобы повторный выбор того же файла сработал
   if (!file) return
   if (!ALLOWED_AVATAR.includes(file.type)) { avatarError.value = 'Нужен JPEG, PNG или WebP'; return }
-  if (file.size > MAX_AVATAR) { avatarError.value = 'Файл больше 2 МБ'; return }
+  if (file.size > MAX_AVATAR) { avatarError.value = 'Файл больше 16 МБ'; return }
   avatarLoading.value = true
   try {
     const { data } = await authApi.uploadAvatar(file)
     auth.setAvatar(data.avatar_url)
-  } catch {
-    avatarError.value = 'Не удалось загрузить фото'
+  } catch (e) {
+    avatarError.value = e.response?.data?.message || 'Не удалось загрузить фото'
   } finally {
     avatarLoading.value = false
   }

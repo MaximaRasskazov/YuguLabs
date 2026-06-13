@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
@@ -30,9 +31,16 @@ func RequirePermission(svc *rbac.Service, permissionSlug string) func(http.Handl
 				return
 			}
 			if !has {
+				// В сообщении называем конкретное требуемое право — чтобы
+				// пользователь/разработчик сразу понимал, чего не хватает,
+				// а не гадал над абстрактным «недостаточно прав».
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
-				_, _ = w.Write([]byte(`{"error":"forbidden","message":"insufficient permissions"}`))
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error":               "forbidden",
+					"message":             "Недостаточно прав: для этого действия требуется разрешение «" + permissionSlug + "», которого у вас нет.",
+					"required_permission": permissionSlug,
+				})
 				return
 			}
 			next.ServeHTTP(w, r)

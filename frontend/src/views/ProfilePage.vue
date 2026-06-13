@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, reactive } from 'vue'
+import { ref, computed, reactive, watch } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { authApi } from '../api/auth'
+import { saveBlob, filenameFromDisposition } from '../utils/download'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 
@@ -9,6 +10,54 @@ const auth = useAuthStore()
 const sidebarOpen = ref(false)
 
 const ROLE_LABEL = { STUDENT: 'Студент', TEACHER: 'Преподаватель', DEAN: 'Деканат' }
+
+// ── Личные данные (ФИО / группа) ──────────────────────────
+// Редактирование профиля: PATCH /api/me. Изменения логируются на бэкенде
+// в change_logs (видны в админском журнале изменений).
+const edit = reactive({ lastName: '', firstName: '', middleName: '', group: '' })
+const editError = ref('')
+const editSuccess = ref(false)
+const editLoading = ref(false)
+
+function resetEdit() {
+  edit.lastName   = auth.user?.lastName   ?? ''
+  edit.firstName  = auth.user?.firstName  ?? ''
+  edit.middleName = auth.user?.middleName ?? ''
+  edit.group      = auth.user?.group      ?? ''
+}
+resetEdit()
+watch(() => auth.user, resetEdit)
+
+const editDirty = computed(() =>
+  edit.lastName   !== (auth.user?.lastName   ?? '') ||
+  edit.firstName  !== (auth.user?.firstName  ?? '') ||
+  edit.middleName !== (auth.user?.middleName ?? '') ||
+  (auth.isStudent && edit.group !== (auth.user?.group ?? '')),
+)
+
+async function saveProfile() {
+  editError.value = ''
+  editSuccess.value = false
+  if (!edit.firstName.trim()) { editError.value = 'Имя не может быть пустым'; return }
+  if (!edit.lastName.trim())  { editError.value = 'Фамилия не может быть пустой'; return }
+  editLoading.value = true
+  try {
+    const payload = {
+      first_name:  edit.firstName.trim(),
+      last_name:   edit.lastName.trim(),
+      middle_name: edit.middleName.trim(),
+    }
+    if (auth.isStudent) payload.group_name = edit.group.trim()
+    const { data } = await authApi.updateProfile(payload)
+    auth.setProfile(data.user)
+    editSuccess.value = true
+    setTimeout(() => { editSuccess.value = false }, 3000)
+  } catch (e) {
+    editError.value = e.response?.data?.message || 'Не удалось сохранить данные'
+  } finally {
+    editLoading.value = false
+  }
+}
 
 // ── Password ──────────────────────────────────────────────
 const pw = reactive({ current: '', next: '', confirm: '' })
@@ -41,8 +90,11 @@ const fileInput = ref(null)
 const avatarLoading = ref(false)
 const avatarError = ref('')
 
-const MAX_AVATAR = 2 * 1024 * 1024 // 2 МБ — синхронно с бэкендом
+// Бэкенд сам сжимает и уменьшает большие снимки (вплоть до 4K), поэтому
+// клиентский лимит щедрый — 16 МБ, как и серверный MaxUploadBytes.
+const MAX_AVATAR = 16 * 1024 * 1024
 const ALLOWED_AVATAR = ['image/jpeg', 'image/png', 'image/webp']
+const avatarDownloading = ref(false)
 
 function pickAvatar() {
   avatarError.value = ''
@@ -54,7 +106,7 @@ async function onAvatarPicked(e) {
   e.target.value = '' // сброс — чтобы повторный выбор того же файла сработал
   if (!file) return
   if (!ALLOWED_AVATAR.includes(file.type)) { avatarError.value = 'Нужен JPEG, PNG или WebP'; return }
-  if (file.size > MAX_AVATAR) { avatarError.value = 'Файл больше 2 МБ'; return }
+  if (file.size > MAX_AVATAR) { avatarError.value = 'Файл больше 16 МБ'; return }
   avatarLoading.value = true
   try {
     const { data } = await authApi.uploadAvatar(file)
@@ -76,6 +128,22 @@ async function removeAvatar() {
     avatarError.value = 'Не удалось удалить фото'
   } finally {
     avatarLoading.value = false
+  }
+}
+
+// Скачивает сжатый оригинал — он недоступен по прямому URL, только через
+// защищённый маршрут с проверкой владельца.
+async function downloadOriginal() {
+  avatarError.value = ''
+  avatarDownloading.value = true
+  try {
+    const resp = await authApi.downloadOriginal()
+    const name = filenameFromDisposition(resp.headers['content-disposition'], 'photo.jpg')
+    saveBlob(resp.data, name)
+  } catch {
+    avatarError.value = 'Не удалось скачать оригинал'
+  } finally {
+    avatarDownloading.value = false
   }
 }
 
@@ -138,6 +206,13 @@ const fullName = computed(() =>
                   :disabled="avatarLoading"
                   @click="removeAvatar"
                 >Удалить фото</button>
+                <button
+                  v-if="auth.user?.avatar"
+                  type="button"
+                  class="avatar-link"
+                  :disabled="avatarDownloading"
+                  @click="downloadOriginal"
+                >{{ avatarDownloading ? 'Скачивание…' : 'Скачать оригинал' }}</button>
                 <span v-if="avatarLoading" class="avatar-hint">Загрузка…</span>
                 <span v-if="avatarError" class="avatar-err">{{ avatarError }}</span>
               </div>
@@ -146,32 +221,36 @@ const fullName = computed(() =>
 
           <div class="section-divider" />
 
-          <!-- ── Info fields: Student ── -->
-          <div v-if="auth.isStudent" class="fields-grid">
+          <!-- ── Личные данные (редактируемые) ── -->
+          <div class="section-title">Личные данные</div>
+          <div class="fields-grid">
             <div class="field-group">
-              <label class="field-label">ФИО</label>
-              <input class="field-input field-readonly" :value="fullName" readonly />
+              <label class="field-label">Фамилия</label>
+              <input class="field-input" v-model="edit.lastName" placeholder="Фамилия" />
             </div>
             <div class="field-group">
+              <label class="field-label">Имя</label>
+              <input class="field-input" v-model="edit.firstName" placeholder="Имя" />
+            </div>
+            <div class="field-group">
+              <label class="field-label">Отчество</label>
+              <input class="field-input" v-model="edit.middleName" placeholder="—" />
+            </div>
+            <div v-if="auth.isStudent" class="field-group">
               <label class="field-label">Группа</label>
-              <input class="field-input field-readonly" :value="auth.user?.group || '—'" readonly />
+              <input class="field-input" v-model="edit.group" placeholder="Напр. ИВТ-21" />
             </div>
-            <div class="field-group">
-              <label class="field-label">Курс</label>
-              <input class="field-input field-readonly" :value="auth.user?.course || '—'" readonly />
-            </div>
-          </div>
-
-          <!-- ── Info fields: Dean / Teacher ── -->
-          <div v-else class="fields-grid">
-            <div class="field-group">
-              <label class="field-label">ФИО</label>
-              <input class="field-input field-readonly" :value="fullName" readonly />
-            </div>
-            <div class="field-group">
+            <div v-else class="field-group">
               <label class="field-label">Должность</label>
               <input class="field-input field-readonly" :value="ROLE_LABEL[auth.role]" readonly />
             </div>
+          </div>
+          <div class="edit-actions">
+            <button class="btn-primary" :disabled="editLoading || !editDirty" @click="saveProfile">
+              {{ editLoading ? 'Сохранение…' : 'Сохранить' }}
+            </button>
+            <span v-if="editSuccess" class="pw-success edit-status">Данные обновлены</span>
+            <span v-if="editError" class="pw-error edit-status">{{ editError }}</span>
           </div>
 
           <!-- ── Email ── -->
@@ -413,6 +492,29 @@ const fullName = computed(() =>
   transition: border-color .15s, color .15s, background .15s;
 }
 .btn-outline:hover { border-color: var(--brand); color: var(--brand); background: rgba(59,63,224,.04); }
+
+/* ── Кнопка сохранения профиля ── */
+.btn-primary {
+  height: 44px; padding: 0 22px;
+  border: 1.5px solid var(--brand); border-radius: var(--radius);
+  background: var(--brand); color: #fff;
+  font: 600 13px/1 'Inter', sans-serif; cursor: pointer; white-space: nowrap;
+  transition: background .15s, border-color .15s, opacity .15s;
+}
+.btn-primary:hover:not(:disabled) { background: var(--brand-ink); border-color: var(--brand-ink); }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+.edit-actions { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+.edit-status { margin: 0; }
+
+/* ── Ссылка «Скачать оригинал» ── */
+.avatar-link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: 500 12px/1 'Inter', sans-serif; color: var(--brand);
+  text-decoration: underline; transition: color .15s;
+}
+.avatar-link:hover:not(:disabled) { color: var(--brand-ink); }
+.avatar-link:disabled { opacity: .5; cursor: default; }
 
 .pw-error {
   font: 13px/1 'Inter', sans-serif;

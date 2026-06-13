@@ -31,6 +31,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/deploy"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/photo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/rbac"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/report"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
@@ -66,6 +67,7 @@ type Deps struct {
 	Users           *user.Service
 	Changelog       *changelog.Service
 	Deploy          *deploy.Service
+	Photos          *photo.Service
 }
 
 // NewRouter собирает chi-роутер: middleware → /health → /api/* → /ws/*.
@@ -107,17 +109,21 @@ func NewRouter(d Deps) http.Handler {
 		// Bearer-токен в header — самодостаточная защита от CSRF, поэтому
 		// CSRF-токены не используем (refresh-cookie HttpOnly, JS его не
 		// видит).
+		// Аватар-маршруты обслуживает PhotoHandler. /api/me/avatar
+		// сохранён как алиас старого фронтового пути загрузки/удаления;
+		// полноценная группа /api/photo монтируется в mountPhoto.
+		photoH := handler.NewPhotoHandler(d.Photos)
 		r.Route("/api/me", func(r chi.Router) {
 			r.Use(mw.Auth(d.Tokens))
 			r.Patch("/", authH.UpdateMe)
 			r.Post("/password", authH.ChangePassword)
-			r.Post("/avatar", authH.UploadAvatar)
-			r.Delete("/avatar", authH.DeleteAvatar)
+			r.Post("/avatar", photoH.Upload)
+			r.Delete("/avatar", photoH.Delete)
 		})
 
 		// Отдача аватара — публично (без auth), чтобы тег <img> мог
 		// загрузить картинку: он не умеет слать Bearer-заголовок.
-		r.Get("/api/users/{id}/avatar", authH.ServeAvatar)
+		r.Get("/api/users/{id}/avatar", photoH.ServeAvatar)
 
 		mountDisciplines(r, d)
 		mountMeDisciplines(r, d)
@@ -133,6 +139,7 @@ func NewRouter(d Deps) http.Handler {
 		mountUsers(r, d)
 		mountDirectory(r, d)
 		mountChangelog(r, d)
+		mountPhoto(r, d)
 	})
 
 	// Webhook авто-деплоя — вне таймаут-группы (git pull может идти дольше

@@ -12,23 +12,110 @@ package user
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
-
-	"github.com/google/uuid"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 )
 
-// Service — выборки пользователей.
+// Ошибки админского редактирования профиля.
+var (
+	// ErrUserNotFound — целевой пользователь не найден.
+	ErrUserNotFound = errors.New("user: пользователь не найден")
+	// ErrInvalidProfile — некорректные данные (например, пустые ФИО).
+	ErrInvalidProfile = errors.New("user: некорректные данные профиля")
+)
+
+// Service — выборки и админское редактирование пользователей.
 type Service struct {
-	store *repo.Store
+	store     *repo.Store
+	changelog *changelog.Service // может быть nil — тогда правки не пишутся в change_logs
 }
 
 func New(store *repo.Store) *Service {
 	return &Service{store: store}
+}
+
+// SetChangelog включает запись админских правок профиля в change_logs.
+func (s *Service) SetChangelog(c *changelog.Service) { s.changelog = c }
+
+// UpdateInput — поля профиля, доступные администратору для правки.
+// nil = «не трогать»; пустая строка очищает (middle_name / group_name).
+// Email не входит — его смена требует подтверждения через почту.
+type UpdateInput struct {
+	FirstName  *string
+	LastName   *string
+	MiddleName *string
+	GroupName  *string
+	Birthday   *time.Time
+}
+
+// UpdateUser применяет правку профиля целевого пользователя администратором.
+//
+// Изменение пишется в change_logs с created_by = actorID (администратор),
+// entity_id = targetID — поэтому в истории пользователя видно, что правку
+// сделал админ, и её можно откатить. Всё в одной транзакции: если лог не
+// записался, правка откатывается.
+func (s *Service) UpdateUser(ctx context.Context, targetID uuid.UUID, in UpdateInput, actorID uuid.UUID) (queries.User, error) {
+	if in.FirstName != nil {
+		v := strings.TrimSpace(*in.FirstName)
+		if v == "" {
+			return queries.User{}, fmt.Errorf("%w: first_name не может быть пустым", ErrInvalidProfile)
+		}
+		in.FirstName = &v
+	}
+	if in.LastName != nil {
+		v := strings.TrimSpace(*in.LastName)
+		if v == "" {
+			return queries.User{}, fmt.Errorf("%w: last_name не может быть пустым", ErrInvalidProfile)
+		}
+		in.LastName = &v
+	}
+
+	params := queries.UpdateUserProfileParams{
+		ID:         pgutil.PgUUID(targetID),
+		FirstName:  in.FirstName,
+		LastName:   in.LastName,
+		MiddleName: in.MiddleName,
+		GroupName:  in.GroupName,
+	}
+	if in.Birthday != nil {
+		params.Birthday = pgtype.Date{Time: *in.Birthday, Valid: true}
+	}
+
+	var updated queries.User
+	err := s.store.RunInTx(ctx, func(q *queries.Queries) error {
+		before, err := q.GetUserByID(ctx, pgutil.PgUUID(targetID))
+		if err != nil {
+			if repo.IsNotFound(err) {
+				return ErrUserNotFound
+			}
+			return fmt.Errorf("get user: %w", err)
+		}
+		updated, err = q.UpdateUserProfile(ctx, params)
+		if err != nil {
+			return fmt.Errorf("update user profile: %w", err)
+		}
+		if s.changelog != nil {
+			if err := s.changelog.LogUpdatedTx(ctx, q, changelog.EntityUser, targetID.String(),
+				changelog.UserSnapshot(before), changelog.UserSnapshot(updated), actorID); err != nil {
+				return fmt.Errorf("changelog updated: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return queries.User{}, err
+	}
+	return updated, nil
 }
 
 // ListInput — фильтры выборки. Все поля опциональны.

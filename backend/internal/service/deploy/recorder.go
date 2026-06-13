@@ -11,15 +11,17 @@ import (
 
 // Стадии и статусы записи журнала деплоя.
 const (
-	StageStarted  = "started"  // запрос принят, начинаем деплой
-	StageLocked   = "locked"   // деплой пропущен — уже идёт другой
-	StageCommand  = "command"  // выполнена git-команда
-	StageFinished = "finished" // деплой завершён (успехом или ошибкой)
+	StageStarted   = "started"   // запрос принят, начинаем деплой
+	StageLocked    = "locked"    // деплой пропущен — уже идёт другой
+	StagePreflight = "preflight" // проверка рабочего дерева до основных команд
+	StageCommand   = "command"   // выполнена git-команда
+	StageFinished  = "finished"  // деплой завершён (успехом или ошибкой)
 
 	StatusStarted = "started"
 	StatusSuccess = "success"
 	StatusError   = "error"
 	StatusSkipped = "skipped"
+	StatusWarning = "warning"
 )
 
 // Entry — одна строка журнала деплоя. Секрет сюда не попадает by design:

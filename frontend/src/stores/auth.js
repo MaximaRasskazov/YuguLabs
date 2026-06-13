@@ -57,6 +57,21 @@ export const useAuthStore = defineStore('auth', {
       localStorage.setItem('user', JSON.stringify(this.user))
     },
 
+    // Применяет обновлённый профиль (ФИО/группа) из ответа PATCH /api/me.
+    // Аватар намеренно НЕ трогаем: ответ обновления профиля не несёт
+    // avatar_url, иначе бы мы его обнулили.
+    setProfile(apiUser) {
+      if (!this.user || !apiUser) return
+      this.user = {
+        ...this.user,
+        firstName:  apiUser.first_name  ?? this.user.firstName,
+        lastName:   apiUser.last_name   ?? this.user.lastName,
+        middleName: apiUser.middle_name ?? '',
+        group:      apiUser.group_name  ?? '',
+      }
+      localStorage.setItem('user', JSON.stringify(this.user))
+    },
+
     // Вызывается при старте приложения — восстанавливает сессию из хранилища
     restore() {
       this.token = localStorage.getItem('token') || null

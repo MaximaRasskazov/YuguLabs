@@ -62,12 +62,6 @@ type UserResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// AvatarResponse — ответ на загрузку аватара: URL с версией, чтобы фронт
-// сразу показал свежую картинку без перезагрузки.
-type AvatarResponse struct {
-	AvatarURL string `json:"avatar_url"`
-}
-
 // RoleResponse — компактное представление роли для /me.
 type RoleResponse struct {
 	ID    uuid.UUID `json:"id"`

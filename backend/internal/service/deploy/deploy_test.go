@@ -5,21 +5,27 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 // fakeRunner записывает выполненные команды и умеет падать на заданной.
+// statusOutput — что вернёт `git status` (пусто = чистое рабочее дерево).
 type fakeRunner struct {
-	calls   []string
-	failOn  string
-	failErr error
+	calls        []string
+	failOn       string
+	failErr      error
+	statusOutput string
 }
 
 func (f *fakeRunner) Run(_ context.Context, _ string, c Command) (string, error) {
 	f.calls = append(f.calls, c.String())
 	if f.failOn != "" && c.String() == f.failOn {
 		return "boom output", f.failErr
+	}
+	if strings.HasPrefix(c.String(), "git status") {
+		return f.statusOutput, nil
 	}
 	return "ok", nil
 }
@@ -49,7 +55,13 @@ func TestDeploy_SuccessRunsCommandsInOrder(t *testing.T) {
 		t.Fatalf("Deploy: %v", err)
 	}
 
-	want := []string{"git checkout main", "git reset --hard HEAD", "git pull origin main"}
+	// Чистое дерево: preflight `git status` (пусто) → без clean → 3 основные.
+	want := []string{
+		"git status --porcelain --untracked-files=all",
+		"git checkout main",
+		"git reset --hard HEAD",
+		"git pull origin main",
+	}
 	if len(runner.calls) != len(want) {
 		t.Fatalf("вызвано %d команд (%v), ожидалось %d", len(runner.calls), runner.calls, len(want))
 	}
@@ -79,8 +91,39 @@ func TestDeploy_BranchTakenFromConfig(t *testing.T) {
 	if _, err := svc.Deploy(context.Background(), ""); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	if runner.calls[0] != "git checkout develop" || runner.calls[2] != "git pull origin develop" {
+	// calls[0] — preflight status; основные команды идут после него.
+	if runner.calls[1] != "git checkout develop" || runner.calls[3] != "git pull origin develop" {
 		t.Fatalf("команды = %v", runner.calls)
+	}
+}
+
+// TestDeploy_DirtyWorktreeCleansAndWarns: при «грязном» дереве перед основными
+// командами выполняется git clean и возвращается warning.
+func TestDeploy_DirtyWorktreeCleansAndWarns(t *testing.T) {
+	runner := &fakeRunner{statusOutput: " M app/main.go\n?? newfile.txt"}
+	svc := New(Config{RepoPath: gitDir(t), Branch: "main"}, runner, NewMemoryLock(), &sliceRecorder{})
+
+	res, err := svc.Deploy(context.Background(), "10.0.0.1")
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if len(res.Warnings) != 1 {
+		t.Fatalf("ожидался 1 warning, получено %v", res.Warnings)
+	}
+	want := []string{
+		"git status --porcelain --untracked-files=all",
+		"git clean -fd",
+		"git checkout main",
+		"git reset --hard HEAD",
+		"git pull origin main",
+	}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("calls = %v", runner.calls)
+	}
+	for i, w := range want {
+		if runner.calls[i] != w {
+			t.Fatalf("calls[%d] = %q, ожидалось %q", i, runner.calls[i], w)
+		}
 	}
 }
 

@@ -67,7 +67,6 @@ type Querier interface {
 	// Периодическая чистка таблицы фоновой задачей.
 	DeleteExpiredAccessTokens(ctx context.Context) (int64, error)
 	DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
-	DeleteUserAvatar(ctx context.Context, userID pgtype.UUID) error
 	DetachPermissionFromRole(ctx context.Context, arg DetachPermissionFromRoleParams) error
 	DetachRoleFromUser(ctx context.Context, arg DetachRoleFromUserParams) error
 	DetachStudentFromDiscipline(ctx context.Context, arg DetachStudentFromDisciplineParams) error
@@ -76,6 +75,15 @@ type Querier interface {
 	// Возвращает запись только если она активна (не отозвана и не истекла).
 	GetAccessTokenByHash(ctx context.Context, tokenHash string) (AccessToken, error)
 	GetAccessTokenByID(ctx context.Context, id pgtype.UUID) (AccessToken, error)
+	// Байты квадратной миниатюры 128×128 для публичной отдачи в <img>.
+	GetActiveUserAvatar(ctx context.Context, userID pgtype.UUID) (GetActiveUserAvatarRow, error)
+	// Байты сжатого оригинала для защищённого скачивания владельцем.
+	GetActiveUserOriginal(ctx context.Context, userID pgtype.UUID) (GetActiveUserOriginalRow, error)
+	// Метаданные активной фотографии (для GET /api/photo). Без bytea.
+	GetActiveUserPhotoMeta(ctx context.Context, userID pgtype.UUID) (GetActiveUserPhotoMetaRow, error)
+	// Лёгкая проверка наличия + версия (updated_at) для cache-busting в /me.
+	// Не выгружает байты.
+	GetActiveUserPhotoVersion(ctx context.Context, userID pgtype.UUID) (pgtype.Timestamptz, error)
 	GetChangeLogByID(ctx context.Context, id int64) (ChangeLog, error)
 	// Используется синхронизатором: повторный pull из внешней системы
 	// не создаёт дубль, а обновляет существующий долг.
@@ -111,9 +119,6 @@ type Querier interface {
 	GetRoleBySlug(ctx context.Context, lower string) (Role, error)
 	GetStatementSheetByRetake(ctx context.Context, retakeID pgtype.UUID) (StatementSheet, error)
 	GetTeacherRoleRequestByID(ctx context.Context, id pgtype.UUID) (TeacherRoleRequest, error)
-	GetUserAvatar(ctx context.Context, userID pgtype.UUID) (GetUserAvatarRow, error)
-	// Лёгкая проверка наличия + версия (updated_at) без выгрузки байтов.
-	GetUserAvatarMeta(ctx context.Context, userID pgtype.UUID) (GetUserAvatarMetaRow, error)
 	// Поиск пользователя по email для логина. Сравнение регистронезависимое
 	// (соответствует UNIQUE-индексу idx_users_email_lower).
 	GetUserByEmail(ctx context.Context, lower string) (User, error)
@@ -128,6 +133,12 @@ type Querier interface {
 	GradeStudentParticipant(ctx context.Context, arg GradeStudentParticipantParams) (RetakeParticipant, error)
 	// Проверка наличия конкретной роли у пользователя.
 	HasRole(ctx context.Context, arg HasRoleParams) (bool, error)
+	// Запросы к user_photos. Метаданные (без bytea) отдаются лёгкими
+	// SELECT'ами; тяжёлые original_content / avatar_content тянем только
+	// там, где реально нужно отдать байты клиенту.
+	// Создаёт новую активную фотографию. RETURNING без bytea — не гоняем
+	// блобы обратно после вставки.
+	InsertUserPhoto(ctx context.Context, arg InsertUserPhotoParams) (InsertUserPhotoRow, error)
 	// Проверка: участвует ли пользователь в пересдаче с одним из указанных
 	// kind. Нужна middleware доступа к составу/ведомости, чтобы преподаватель
 	// не открывал ведомость пересдачи, где он был только студентом.
@@ -138,6 +149,12 @@ type Querier interface {
 	// RBAC-фильтр: преподаватель имеет debts.view.by_discipline только
 	// для своих дисциплин. Сервис вызывает это перед выдачей списка долгов.
 	IsTeacherOfDiscipline(ctx context.Context, arg IsTeacherOfDisciplineParams) (bool, error)
+	// Все активные фотографии с данными владельца — для админского архива.
+	// Мягко удалённые исключены (deleted_at IS NULL).
+	ListActiveUserPhotosForArchive(ctx context.Context) ([]ListActiveUserPhotosForArchiveRow, error)
+	// Метаданные всех активных фотографий (без bytea) с данными владельца —
+	// для админского просмотра «все фото». Мягко удалённые исключены.
+	ListAllActiveUserPhotosMeta(ctx context.Context) ([]ListAllActiveUserPhotosMetaRow, error)
 	// Деканат: общий список (debts.view.all) с пагинацией.
 	ListAllDebts(ctx context.Context, arg ListAllDebtsParams) ([]Debt, error)
 	ListAuditByActor(ctx context.Context, arg ListAuditByActorParams) ([]AuditLog, error)
@@ -307,6 +324,9 @@ type Querier interface {
 	// parameter $1" (SQLSTATE 42P08). Каст ::timestamptz на NULL-ветке нужен,
 	// чтобы тип CASE был однозначен.
 	SetRetakeStatus(ctx context.Context, arg SetRetakeStatusParams) (Retake, error)
+	// Помечает текущую активную фотографию пользователя удалённой. Вызывается
+	// и при явном удалении, и перед вставкой новой (чтобы активная осталась одна).
+	SoftDeleteActiveUserPhoto(ctx context.Context, userID pgtype.UUID) error
 	SoftDeleteDebt(ctx context.Context, arg SoftDeleteDebtParams) error
 	SoftDeleteDiscipline(ctx context.Context, arg SoftDeleteDisciplineParams) error
 	SoftDeletePermission(ctx context.Context, arg SoftDeletePermissionParams) error
@@ -338,7 +358,6 @@ type Querier interface {
 	// "кем/когда внесён черновик". Долг при этом НЕ закрывается — это
 	// делает CloseSheet.
 	UpsertParticipantGradeDraft(ctx context.Context, arg UpsertParticipantGradeDraftParams) (RetakeParticipant, error)
-	UpsertUserAvatar(ctx context.Context, arg UpsertUserAvatarParams) error
 	// Точечная проверка на конкретный permission по slug. Используется в
 	// RBAC-middleware на каждом защищённом запросе.
 	UserHasPermission(ctx context.Context, arg UserHasPermissionParams) (bool, error)

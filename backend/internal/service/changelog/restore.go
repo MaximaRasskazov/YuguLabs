@@ -129,56 +129,73 @@ func (s *Service) restoreRoleChange(ctx context.Context, userIDStr string, befor
 	toRemove, _ := stringField(after, "role_slug")   // новая роль — снять
 
 	return s.store.RunInTx(ctx, func(q *queries.Queries) error {
+		changed := false
 		if toRestore != "" {
-			if err := attachRoleBySlugIfMissing(ctx, q, uid, toRestore, actor); err != nil {
+			did, err := attachRoleBySlugIfMissing(ctx, q, uid, toRestore, actor)
+			if err != nil {
 				return err
 			}
+			changed = changed || did
 		}
 		if toRemove != "" && toRemove != toRestore {
-			if err := detachRoleBySlugIfPresent(ctx, q, uid, toRemove, actor); err != nil {
+			did, err := detachRoleBySlugIfPresent(ctx, q, uid, toRemove, actor)
+			if err != nil {
 				return err
 			}
+			changed = changed || did
+		}
+		// Ничего не поменялось (роль уже в целевом состоянии — повторный откат
+		// той же записи) → не пишем пустой restored_from_log, отдаём noop.
+		if !changed {
+			return ErrRestoreNoop
 		}
 		// before/after меняем местами: текущее состояние «после смены» → «до».
 		return s.write(ctx, q, EntityUser, userIDStr, ActionRestoredFromLog, after, before, actor)
 	})
 }
 
-// attachRoleBySlugIfMissing выдаёт роль по slug, если её ещё нет (idempotent).
-func attachRoleBySlugIfMissing(ctx context.Context, q *queries.Queries, uid uuid.UUID, slug string, actor uuid.UUID) error {
+// attachRoleBySlugIfMissing выдаёт роль по slug, если её ещё нет. Возвращает
+// true, если роль реально была добавлена (false — если уже была).
+func attachRoleBySlugIfMissing(ctx context.Context, q *queries.Queries, uid uuid.UUID, slug string, actor uuid.UUID) (bool, error) {
 	has, err := q.HasRole(ctx, queries.HasRoleParams{UserID: pgutil.PgUUID(uid), Lower: slug})
 	if err != nil {
-		return fmt.Errorf("check role: %w", err)
+		return false, fmt.Errorf("check role: %w", err)
 	}
 	if has {
-		return nil
+		return false, nil
 	}
 	role, err := q.GetRoleBySlug(ctx, slug)
 	if err != nil {
-		return fmt.Errorf("get role %q: %w", slug, err)
+		return false, fmt.Errorf("get role %q: %w", slug, err)
 	}
-	_, err = q.AttachRoleToUser(ctx, queries.AttachRoleToUserParams{
+	if _, err := q.AttachRoleToUser(ctx, queries.AttachRoleToUserParams{
 		UserID: pgutil.PgUUID(uid), RoleID: role.ID, CreatedBy: pgutil.PgUUID(actor),
-	})
-	return err
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-// detachRoleBySlugIfPresent снимает роль по slug, если она активна (idempotent).
-func detachRoleBySlugIfPresent(ctx context.Context, q *queries.Queries, uid uuid.UUID, slug string, actor uuid.UUID) error {
+// detachRoleBySlugIfPresent снимает роль по slug, если она активна. Возвращает
+// true, если роль реально была снята (false — если её и не было).
+func detachRoleBySlugIfPresent(ctx context.Context, q *queries.Queries, uid uuid.UUID, slug string, actor uuid.UUID) (bool, error) {
 	has, err := q.HasRole(ctx, queries.HasRoleParams{UserID: pgutil.PgUUID(uid), Lower: slug})
 	if err != nil {
-		return fmt.Errorf("check role: %w", err)
+		return false, fmt.Errorf("check role: %w", err)
 	}
 	if !has {
-		return nil
+		return false, nil
 	}
 	role, err := q.GetRoleBySlug(ctx, slug)
 	if err != nil {
-		return fmt.Errorf("get role %q: %w", slug, err)
+		return false, fmt.Errorf("get role %q: %w", slug, err)
 	}
-	return q.DetachRoleFromUser(ctx, queries.DetachRoleFromUserParams{
+	if err := q.DetachRoleFromUser(ctx, queries.DetachRoleFromUserParams{
 		UserID: pgutil.PgUUID(uid), RoleID: role.ID, DeletedBy: pgutil.PgUUID(actor),
-	})
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // restoreUserProfile применяет поля before к профилю пользователя и пишет
@@ -192,6 +209,11 @@ func (s *Service) restoreUserProfile(ctx context.Context, userIDStr string, befo
 		cur, err := q.GetUserByID(ctx, pgutil.PgUUID(uid))
 		if err != nil {
 			return fmt.Errorf("get user: %w", err)
+		}
+		// Профиль уже совпадает с before (повторный откат той же записи) →
+		// не пишем пустой restored_from_log, отдаём noop.
+		if !profileNeedsRestore(UserSnapshot(cur), before) {
+			return ErrRestoreNoop
 		}
 		params := queries.UpdateUserProfileParams{ID: pgutil.PgUUID(uid)}
 		if v, ok := stringField(before, "first_name"); ok {
@@ -269,6 +291,21 @@ func (s *Service) restoreRole(ctx context.Context, userIDStr string, roleData Fi
 		}
 		return s.write(ctx, q, EntityUser, userIDStr, ActionRestoredFromLog, before, after, actor)
 	})
+}
+
+// profileNeedsRestore сообщает, изменит ли применение before текущее
+// состояние профиля: true, если хотя бы одно поле из before отличается от
+// текущего. Сравниваются только поля, присутствующие в before (откат трогает
+// именно их). Используется для идемпотентности — чтобы повторный откат уже
+// применённой записи не создавал пустой restored_from_log.
+func profileNeedsRestore(current, before Fields) bool {
+	for k, bv := range before {
+		cv, ok := current[k]
+		if !ok || cv != bv {
+			return true
+		}
+	}
+	return false
 }
 
 func stringField(f Fields, key string) (string, bool) {

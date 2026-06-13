@@ -16,13 +16,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/token"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/user"
 )
@@ -95,6 +98,53 @@ func (f *fixture) registerStudent(t *testing.T, fullSuffix string, group *string
 		_ = repo.CleanupUser(context.Background(), f.store.Pool(), r.User.ID)
 	})
 	return r
+}
+
+func strptr(s string) *string { return &s }
+
+// TestUpdateUser_AdminEditsProfile_Logged проверяет, что админская правка
+// чужого профиля применяется и логируется с автором-администратором.
+func TestUpdateUser_AdminEditsProfile_Logged(t *testing.T) {
+	f := setup(t)
+	svc := user.New(f.store)
+	svc.SetChangelog(changelog.New(f.store))
+
+	suf := uniqSuffix(t)
+	target := f.registerStudent(t, suf, nil)
+	actor := f.registerStudent(t, suf+"a", nil) // выступает админом-актором
+	targetID := pgutil.UUID(target.User.ID)
+	actorID := pgutil.UUID(actor.User.ID)
+
+	updated, err := svc.UpdateUser(context.Background(), targetID, user.UpdateInput{
+		FirstName: strptr("Пётр"),
+		LastName:  strptr("Сидоров"),
+		GroupName: strptr("ИВТ-99"),
+	}, actorID)
+	require.NoError(t, err)
+	require.Equal(t, "Пётр", updated.FirstName)
+	require.Equal(t, "Сидоров", updated.LastName)
+	require.NotNil(t, updated.GroupName)
+	require.Equal(t, "ИВТ-99", *updated.GroupName)
+
+	logs, err := f.store.ListChangeLogsForEntity(context.Background(), queries.ListChangeLogsForEntityParams{
+		EntityType: "user", EntityID: targetID.String(), Limit: 10, Offset: 0,
+	})
+	require.NoError(t, err)
+	var foundByAdmin bool
+	for _, l := range logs {
+		if l.Action == "updated" && pgutil.UUID(l.CreatedBy) == actorID {
+			foundByAdmin = true
+		}
+	}
+	require.True(t, foundByAdmin, "правка залогирована с created_by = администратор")
+
+	// Пустое имя → отклоняется.
+	_, err = svc.UpdateUser(context.Background(), targetID, user.UpdateInput{FirstName: strptr("   ")}, actorID)
+	require.ErrorIs(t, err, user.ErrInvalidProfile)
+
+	// Несуществующий пользователь → ErrUserNotFound.
+	_, err = svc.UpdateUser(context.Background(), uuid.New(), user.UpdateInput{FirstName: strptr("X")}, actorID)
+	require.ErrorIs(t, err, user.ErrUserNotFound)
 }
 
 // promoteToTeacher выдаёт пользователю роль teacher (в дополнение к student,

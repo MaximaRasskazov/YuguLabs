@@ -125,25 +125,29 @@ func (h *ChangeLogHandler) entityStory(w http.ResponseWriter, r *http.Request, e
 func (h *ChangeLogHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	logID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "id записи истории должен быть числом")
+		writeError(w, http.StatusBadRequest, "invalid_id", "Идентификатор записи истории должен быть числом.")
 		return
 	}
 	actorID, ok := mw.UserID(r.Context())
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "not authenticated")
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Требуется авторизация — войдите в систему.")
 		return
 	}
 
 	if err := h.cl.RestoreFromLog(r.Context(), logID, actorID); err != nil {
 		switch {
 		case errors.Is(err, changelog.ErrLogNotFound):
-			writeError(w, http.StatusNotFound, "log_not_found", "запись истории не найдена")
+			writeError(w, http.StatusNotFound, "log_not_found",
+				"Запись истории не найдена — возможно, неверный id или запись удалена.")
 		case errors.Is(err, changelog.ErrRestoreUnsupported):
-			writeError(w, http.StatusUnprocessableEntity, "restore_unsupported", "откат для этого типа записи не поддержан")
+			writeError(w, http.StatusUnprocessableEntity, "restore_unsupported",
+				"Эту запись нельзя откатить: для событий «создание» и «смена пароля» откат не предусмотрен — возвращать нечего.")
 		case errors.Is(err, changelog.ErrRestoreNoop):
-			writeError(w, http.StatusConflict, "restore_noop", "откат уже выполнен")
+			writeError(w, http.StatusConflict, "restore_noop",
+				"Откат не требуется: запись уже в этом состоянии (вероятно, откат был выполнен ранее).")
 		default:
-			writeError(w, http.StatusInternalServerError, "internal", "не удалось выполнить откат")
+			writeError(w, http.StatusInternalServerError, "internal",
+				"Не удалось выполнить откат. Попробуйте позже.")
 		}
 		return
 	}

@@ -19,14 +19,25 @@ export const authApi = {
   changePassword: (currentPassword, newPassword) =>
     http.post('/api/me/password', { current_password: currentPassword, new_password: newPassword }),
 
-  // Аватар профиля. uploadAvatar шлёт multipart (поле «avatar»),
-  // возвращает { avatar_url }. deleteAvatar убирает текущий.
+  // Точечное обновление профиля (PATCH-семантика): ФИО, группа, дата
+  // рождения. Передавайте только меняемые поля; бэкенд логирует diff в
+  // change_logs. Возвращает обновлённый ProfileResponse ({ user, ... }).
+  updateProfile: (data) =>
+    http.patch('/api/me', data),
+
+  // Фотография профиля. uploadAvatar шлёт multipart (поле «photo»),
+  // возвращает { avatar_url, ... }. Бэкенд проверяет подлинность, сжимает
+  // оригинал и делает аватар 128×128. deleteAvatar убирает текущую.
   uploadAvatar: (file) => {
     const fd = new FormData()
-    fd.append('avatar', file)
+    fd.append('photo', file)
     return http.post('/api/me/avatar', fd)
   },
 
   deleteAvatar: () =>
     http.delete('/api/me/avatar'),
+
+  // Скачать оригинал своей фотографии (защищённый маршрут, бинарь).
+  downloadOriginal: () =>
+    http.get('/api/photo/download', { responseType: 'blob' }),
 }
