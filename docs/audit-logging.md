@@ -79,6 +79,7 @@ permissions** (аудит): что сделано, где, как устроен
 | `internal/service/auth/service.go`, `profile.go` | Логирование `user`: `created` (регистрация), `updated` (профиль), `password_changed` (без пароля) |
 | `internal/service/rbac/service.go` | Логирование выдачи/снятия роли (`user` + `role`); **атомарный `ChangeRole`** → одно событие `role_changed`; идемпотентная выдача (`HasRole`-гард) |
 | `internal/transport/http/handler/rbac.go`, `router_rbac.go`, `dto/teacher_request.go` | Ручка `POST /api/users/{id}/roles/change` (`ChangeRoleRequest`) — атомарная смена роли |
+| `internal/service/user/service.go`, `handler/users.go`, `router_rbac.go` | Ручка `PATCH /api/users/{id}` (право `users.update`) — админ правит ФИО/группу любого пользователя; пишет `updated` с `created_by` = администратор (в транзакции) |
 | `internal/transport/http/handler/changelog.go` | Хендлеры story (user/role/permission) и restore |
 | `internal/transport/http/dto/changelog.go` | DTO истории с `changed_fields` |
 | `internal/transport/http/router_changelog.go`, `router.go`, `cmd/server/main.go` | Роуты, защита правами, проводка зависимостей |
@@ -86,7 +87,8 @@ permissions** (аудит): что сделано, где, как устроен
 ### Frontend
 | Файл | Что |
 |---|---|
-| `frontend/src/views/AdminPage.vue` | Кнопка «История» (модалка с диффом old→new и «Откатить») + «Журнал изменений» в шапке. Смена роли — один запрос `…/roles/change`. Запись `role_changed` показывается как «Роль изменена: X → Y». После отката кнопка → серый бейдж «Откат выполнен»; `restore_noop` → тост «Откат уже выполнен» |
+| `frontend/src/views/AdminPage.vue` | Кнопка «История» (модалка с диффом old→new и «Откатить») + «Журнал изменений» в шапке. Смена роли — один запрос `…/roles/change`. Запись `role_changed` показывается как «Роль изменена: X → Y». После отката кнопка → серый бейдж «Откат выполнен»; `restore_noop` → тост «Откат уже выполнен». Кнопка «Изменить» — модалка правки ФИО/группы (`PATCH /api/users/{id}`), изменение тут же видно в «Истории» |
+| `frontend/src/views/ProfilePage.vue` (маршрут `/profile`) | Самостоятельная правка ФИО/группы пользователем (`PATCH /api/me`) — ещё один источник `updated`-логов для демо |
 
 ### Тесты
 | Файл | Что |
@@ -94,6 +96,7 @@ permissions** (аудит): что сделано, где, как устроен
 | `internal/service/changelog/snapshot_test.go` | `Diff` (только изменившиеся поля), `UserSnapshot` (без пароля) — юнит, без БД |
 | `internal/service/changelog/restore_test.go` | Undo профиля, undo выдачи роли, **undo `role_changed`** (teacher→dean → откат → снова teacher), повторный откат → `ErrRestoreNoop`, «откат не поддержан», «запись не найдена» — интеграционные |
 | `internal/service/rbac/service_test.go` | **`ChangeRole`**: атомарный своп роли; при отклонении (privilege escalation) старая роль остаётся — интеграционные |
+| `internal/service/user/service_test.go` | **`UpdateUser`**: админ правит чужой профиль → применяется + лог `updated` с `created_by` = админ; пустое ФИО → ошибка; несуществующий → not found — интеграционный |
 | `internal/service/changelog/service_test.go` | Запись created/updated/soft_deleted, порядок, валидация — интеграционные (были) |
 | `internal/service/auth/service_test.go` | `Register` пишет `created` в change_logs — интеграционный |
 | `internal/transport/http/router_smoke_test.go` | Нет конфликтов chi-роутов |
@@ -111,13 +114,29 @@ permissions** (аудит): что сделано, где, как устроен
 | POST | `/api/changelog/{id}/restore` | `changelog.restore` | Откат к `before` из записи лога |
 
 Ответ story — массив записей; в каждой `changed_fields` = `{ поле: {old, new} }`
-(только изменившиеся). Нет права → **403**, нет записи для restore → **404**,
+(только изменившиеся). Нет права → **403** (в теле — имя требуемого права:
+`message` + поле `required_permission`), нет записи для restore → **404**,
 откат не поддержан (`created`/`password_changed`) → **422**, повторный откат
-(состояние уже целевое, менять нечего) → **409 `restore_noop`**.
+(состояние уже целевое, менять нечего) → **409 `restore_noop`**. Все сообщения
+об ошибках — человекочитаемые, объясняют причину (например, для `422` — что
+именно у создания/смены пароля откатывать нечего).
+
+> **Откат смены роли и эмулятор-sync.** Откат `role_changed` возвращает
+> прежнюю роль корректно (см. тесты). Но фоновый sync из эмулятора раньше
+> переутверждал роль на каждом цикле и «возвращал» её после отката. Исправлено:
+> `AssignRoleFromSync` назначает роль эмулятора **только при первом импорте**
+> (когда активной роли ещё нет) и не трогает роли, изменённые вручную —
+> ручное управление авторитетно, откат держится. Регрессия закрыта тестом
+> `TestAssignRoleFromSync_FirstImportOnly`.
 
 > Сама смена роли выполняется атомарной ручкой RBAC
 > `POST /api/users/{id}/roles/change` (`{from_slug, to_slug}`) — снять старую и
 > выдать новую в одной транзакции. Именно она пишет событие `role_changed`.
+>
+> Правку ФИО/группы пользователя администратором выполняет
+> `PATCH /api/users/{id}` (право `users.update`). Изменение пишется как
+> `updated` с `created_by` = администратор (а не сам пользователь), поэтому в
+> истории видно, кто правил, и правку можно откатить.
 
 ---
 
@@ -191,6 +210,7 @@ make test-integration         # поднять Postgres и прогнать ВС
 | Корректный сбор before/after | 10 | ✅ полные срезы в БД, дифф на выдаче |
 | Undo (откат к состоянию из лога) | 30 | ✅ профиль + роли, `RestoreFromLog` |
 | Права на просмотр/откат, 403 без прав | 1 | ✅ `changelog.view` / `changelog.restore` |
+| 403 называет требуемое право | 1 | ✅ `message` + `required_permission` в теле ответа |
 | JSON-ответы | 2 | ✅ |
 | Не светить служебные поля/пароли (штраф −10) | — | ✅ `UserSnapshot` без `password_hash` |
 | Покрытие тестами | до 8 | ✅ юнит + интеграционные |

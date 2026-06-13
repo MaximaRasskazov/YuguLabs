@@ -34,17 +34,26 @@ Authorization: Bearer {{login.response.body.$.access_token}}
 @userId = PASTE-USER-ID
 ###############################################################################
 
-### 3. Сменить роль АТОМАРНО: student → teacher одним запросом.
+### 3. Админ меняет ФИО/группу пользователя → 200, логируется как "updated".
+#      created_by = АДМИНИСТРАТОР (не сам пользователь). Изменение видно в
+#      истории (#6) и откатываемо (#8). Право users.update (есть у админа).
+PATCH {{baseUrl}}/api/users/{{userId}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{ "first_name": "Пётр", "last_name": "Сидоров", "group_name": "ИВТ-21" }
+
+### 4. Сменить роль АТОМАРНО: student → teacher одним запросом.
 #      Снимает старую и выдаёт новую в одной транзакции; в журнале появляется
 #      ОДНА запись "Роль изменена: Студент → Преподаватель" (action role_changed),
-#      которую можно откатить целиком (шаг 7).
+#      которую можно откатить целиком (шаг 8).
 POST {{baseUrl}}/api/users/{{userId}}/roles/change
 Authorization: Bearer {{login.response.body.$.access_token}}
 Content-Type: application/json
 
 { "from_slug": "student", "to_slug": "teacher" }
 
-### 4. (Альтернатива) точечная выдача роли отдельным запросом — логируется
+### 5. (Альтернатива) точечная выдача роли отдельным запросом — логируется
 #      как "Выдана роль" (role_assigned). Идемпотентно: повтор уже активной
 #      роли не падает.
 POST {{baseUrl}}/api/users/{{userId}}/roles
@@ -53,40 +62,42 @@ Content-Type: application/json
 
 { "role_slug": "teacher" }
 
-### 5. История изменений этого пользователя (видно created_by, before/after-дифф)
+### 6. История изменений этого пользователя (видно created_by, before/after-дифф).
+#      Здесь будут и правка ФИО (#3, автор-админ), и смена роли (#4).
 GET {{baseUrl}}/api/users/{{userId}}/story
 Authorization: Bearer {{login.response.body.$.access_token}}
 
-### 6. Общий журнал последних изменений по всем (с ФИО, без техники)
+### 7. Общий журнал последних изменений по всем (с ФИО, без техники)
 GET {{baseUrl}}/api/changelog?limit=50
 Authorization: Bearer {{login.response.body.$.access_token}}
 
 ###############################################################################
-# Возьми id записи (число "id") из ответа #5 или #6 и вставь:
+# Возьми id записи (число "id") из ответа #6 или #7 и вставь:
 @logId = PASTE-LOG-ID
 ###############################################################################
 
-### 7. Откат (undo) записи по её id → 204; в истории появится "Откат ..."
-#      Для записи "Роль изменена" откат возвращает прежнюю роль целиком.
+### 8. Откат (undo) записи по её id → 204; в истории появится "Откат ..."
+#      Для "updated" (правка ФИО) возвращает прежние значения; для
+#      "Роль изменена" — прежнюю роль целиком.
 POST {{baseUrl}}/api/changelog/{{logId}}/restore
 Authorization: Bearer {{login.response.body.$.access_token}}
 
-### 7b. Повторный откат той же записи (состояние уже целевое) → 409 restore_noop
+### 8b. Повторный откат той же записи (состояние уже целевое) → 409 restore_noop
 #       ("откат уже выполнен") — это не ошибка 500, а понятный конфликт.
 POST {{baseUrl}}/api/changelog/{{logId}}/restore
 Authorization: Bearer {{login.response.body.$.access_token}}
 
-### 8. Откат записи, которую нельзя откатить (created/password) → 422
+### 9. Откат записи, которую нельзя откатить (created/password) → 422
 #      (подставь id такой записи в @logId выше и отправь снова — увидишь 422)
 
-### 9. Откат несуществующей записи → 404
+### 10. Откат несуществующей записи → 404
 POST {{baseUrl}}/api/changelog/999999999/restore
 Authorization: Bearer {{login.response.body.$.access_token}}
 
-### 10. История роли — кому её выдавали/снимали. roleId — uuid роли из БД/ответа.
+### 11. История роли — кому её выдавали/снимали. roleId — uuid роли из БД/ответа.
 @roleId = PASTE-ROLE-ID
 GET {{baseUrl}}/api/roles/{{roleId}}/story
 Authorization: Bearer {{login.response.body.$.access_token}}
 
-### 11. Проверка прав: журнал без токена → 401 (не админ/не авторизован)
+### 12. Проверка прав: журнал без токена → 401 (не админ/не авторизован)
 GET {{baseUrl}}/api/changelog?limit=10

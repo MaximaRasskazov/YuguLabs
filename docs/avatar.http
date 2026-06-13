@@ -1,24 +1,26 @@
 ###############################################################################
-# Аватар профиля — сценарий для VS Code REST Client (humao.rest-client).
+# Фотография профиля — сценарий для VS Code REST Client (humao.rest-client).
 #
-# Эндпоинты:
-#   POST   /api/me/avatar          — загрузить (multipart, поле "avatar")
-#   DELETE /api/me/avatar          — удалить свой аватар
-#   GET    /api/users/{id}/avatar  — публичная отдача (для тега <img>)
+# Эндпоинты (лаба «загрузка файлов»):
+#   POST   /api/photo              — загрузить (multipart, поле "photo")
+#   GET    /api/photo              — метаданные своей фотографии
+#   DELETE /api/photo              — мягко удалить свою фотографию
+#   GET    /api/photo/download     — скачать сжатый оригинал (только владелец)
+#   POST   /api/photo/archive      — ZIP всех фото + Excel-реестр (админ)
+#   GET    /api/users/{id}/avatar  — публичная отдача миниатюры (для <img>)
+#   POST/DELETE /api/me/avatar     — алиас загрузки/удаления (совместимость)
 #
 # Как пользоваться:
 #   1. Подними стек: APP_PORT=8080 docker compose up -d --build
-#   2. Для шага #2 (успешная загрузка) положи РЯДОМ с этим файлом любую
-#      маленькую картинку JPEG/PNG/WebP и назови её avatar-sample.png
-#      (или поправь путь в строке "< ./avatar-sample.png"). Остальные шаги
-#      работают без файлов на диске.
+#   2. Для шага #2 положи РЯДОМ с этим файлом маленькую картинку
+#      JPEG/PNG/WebP и назови её avatar-sample.png.
 #   3. Жми "Send Request" над каждым запросом по порядку.
 #
 # СУТЬ ДЕМО — шаг #3: отправляем обычный ТЕКСТ под именем pic.png с заголовком
-# Content-Type: image/png. Сервер игнорирует имя и заголовок, смотрит на
-# СИГНАТУРУ содержимого (http.DetectContentType) и отвергает файл → 415.
-# Это доказывает: фронтовый фильтр выбора файла — лишь удобство, а настоящая
-# проверка типа живёт на сервере и её нельзя обойти переименованием.
+# Content-Type: image/png. Сервер игнорирует имя и заголовок: он пытается
+# РЕАЛЬНО декодировать изображение, не может — и отвергает файл → 415.
+# Доказывает: фронтовый фильтр выбора файла — лишь удобство, настоящая
+# проверка типа живёт на сервере и её не обойти переименованием.
 ###############################################################################
 
 @baseUrl    = http://localhost:8080
@@ -32,57 +34,82 @@ Content-Type: application/json
 
 { "email": "{{adminEmail}}", "password": "{{password}}" }
 
-### 2. Загрузить настоящую картинку → 200 + {"avatar_url": "/api/users/.../avatar?v=..."}
+### 2. Загрузить настоящую картинку → 200 + PhotoResponse (avatar_url, download_url, ...)
 #      Нужен файл ./avatar-sample.png рядом с этим .http (см. шапку).
+#      Сервер сожмёт оригинал и сделает аватар 128×128.
 # @name upload
-POST {{baseUrl}}/api/me/avatar
+POST {{baseUrl}}/api/photo
 Authorization: Bearer {{login.response.body.$.access_token}}
-Content-Type: multipart/form-data; boundary=----avatar
+Content-Type: multipart/form-data; boundary=----photo
 
-------avatar
-Content-Disposition: form-data; name="avatar"; filename="avatar-sample.png"
+------photo
+Content-Disposition: form-data; name="photo"; filename="avatar-sample.png"
 Content-Type: image/png
 
 < ./avatar-sample.png
-------avatar--
+------photo
+Content-Disposition: form-data; name="description"
 
-### 3. ГЛАВНОЕ: текст под видом pic.png → 415 avatar_type (проверка по сигнатуре).
+Моё фото профиля
+------photo--
+
+### 3. ГЛАВНОЕ: текст под видом pic.png → 415 invalid_image (проверка по декоду).
 #      Тело — обычный текст; по байтам это не картинка, имя/заголовок не спасают.
-POST {{baseUrl}}/api/me/avatar
+POST {{baseUrl}}/api/photo
 Authorization: Bearer {{login.response.body.$.access_token}}
-Content-Type: multipart/form-data; boundary=----avatar
+Content-Type: multipart/form-data; boundary=----photo
 
-------avatar
-Content-Disposition: form-data; name="avatar"; filename="pic.png"
+------photo
+Content-Disposition: form-data; name="photo"; filename="pic.png"
 Content-Type: image/png
 
-это просто текст, а не картинка — сервер должен отвергнуть по сигнатуре
-------avatar--
+это просто текст, а не картинка — сервер должен отвергнуть при декодировании
+------photo--
 
-### 4. Пустой файл → 400 avatar_empty
-POST {{baseUrl}}/api/me/avatar
+### 4. Пустой файл → 400 photo_empty
+POST {{baseUrl}}/api/photo
 Authorization: Bearer {{login.response.body.$.access_token}}
-Content-Type: multipart/form-data; boundary=----avatar
+Content-Type: multipart/form-data; boundary=----photo
 
-------avatar
-Content-Disposition: form-data; name="avatar"; filename="empty.png"
+------photo
+Content-Disposition: form-data; name="photo"; filename="empty.png"
 Content-Type: image/png
 
-------avatar--
+------photo--
 
-### 5. Публичная отдача аватара — URL берём прямо из ответа #2 → 200, картинка.
-#      avatar_url уже содержит путь /api/users/{id}/avatar?v=<версия>.
-GET {{baseUrl}}{{upload.response.body.$.avatar_url}}
-
-### 6. Удалить свой аватар → 204
-DELETE {{baseUrl}}/api/me/avatar
+### 5. Метаданные своей фотографии → 200 (id, format, size_bytes, width, height, ...)
+GET {{baseUrl}}/api/photo
 Authorization: Bearer {{login.response.body.$.access_token}}
 
-### 7. После удаления публичная отдача → 404 avatar_not_found
+### 6. Публичная отдача миниатюры — URL из ответа #2 → 200, картинка 128×128.
 GET {{baseUrl}}{{upload.response.body.$.avatar_url}}
+
+### 7. Скачать сжатый оригинал (только владелец) → 200, бинарь с attachment.
+GET {{baseUrl}}/api/photo/download
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### 8. Список всех фото (только админ, photos.export) → 200, JSON-массив метаданных.
+#      Каждый элемент содержит avatar_url для просмотра миниатюры.
+GET {{baseUrl}}/api/photo/all
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### 9. Архив всех фото (право photos.export, есть у админа) → 200, ZIP.
+#      Внутри: originals/ (сжатые копии), avatars/ и registry.xlsx.
+POST {{baseUrl}}/api/photo/archive
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### 10. Удалить свою фотографию → 204
+DELETE {{baseUrl}}/api/photo
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### 11. После удаления метаданные → 404 photo_not_found
+GET {{baseUrl}}/api/photo
+Authorization: Bearer {{login.response.body.$.access_token}}
 
 ###############################################################################
-# Не вошло (трудно без файла-фикстуры на 2 МБ):
-#   • файл > 2 МБ → 413 avatar_too_large — проверено Go-юнит-тестом
-#     TestAuth_SetAvatar_Validation (backend/internal/service/auth/avatar_test.go).
+# Не вошло (трудно без файла-фикстуры):
+#   • файл > 16 МБ → 413 photo_too_large — ограничение тела http.MaxBytesReader.
+#   • изображение > 40 Мп (decompression bomb) → 413 image_too_large —
+#     проверено Go-юнит-тестом TestProcess_RejectsPixelBomb
+#     (backend/internal/imageutil/imageutil_test.go).
 ###############################################################################
