@@ -7,8 +7,19 @@
 #   Доступ: только админ (permission calculate-attendance).
 #
 # Как пользоваться:
-#   1. Подними стек:  docker compose up -d --build
-#      (или локально: cd backend && go run ./cmd/server)
+#   1. ВАЖНО про порт. baseUrl ниже = http://localhost:8080. Чтобы стек
+#      поднялся именно на 8080, в .env должна быть строка APP_PORT=8080
+#      (в .env.example она есть; в свой .env добавь, если её нет — иначе
+#      docker возьмёт дефолт :80 и запросы на :8080 не дойдут).
+#
+#      PowerShell — поднять стек (из корня проекта):
+#         docker compose up -d --build
+#         docker compose ps        # у frontend в PORTS должно быть 0.0.0.0:8080->80
+#
+#      Если стек уже на :80 (APP_PORT не задан) — либо поменяй baseUrl ниже на
+#      http://localhost:80, либо добавь APP_PORT=8080 в .env и пересоздай:
+#         docker compose up -d
+#
 #   2. Рядом с этим файлом лежит готовый attendance-sample.xlsx (см. шаг #2).
 #   3. Жми "Send Request" над каждым запросом по порядку.
 #
@@ -21,6 +32,7 @@
 #   • #6 — не .xlsx → 422.
 ###############################################################################
 
+# Порт: 8080, если APP_PORT=8080 в .env (см. шапку). Иначе смени на :80.
 @baseUrl     = http://localhost:8080
 @adminEmail  = admin@academic.local
 @userEmail   = student@academic.local

@@ -54,6 +54,11 @@ func NewFileRecorder(path string) *FileRecorder {
 	return &FileRecorder{path: path}
 }
 
+// logDivider — визуальный разделитель в консольном логе сервера, чтобы
+// события разных вызовов webhook не сливались в сплошной поток (в файл-журнал
+// он НЕ пишется — там строгий JSON Lines).
+const logDivider = "════════════════════ DEPLOY ════════════════════"
+
 // Record проставляет время (если не задано), пишет в slog и дописывает
 // строку в файл-журнал.
 func (r *FileRecorder) Record(e Entry) {
@@ -61,9 +66,20 @@ func (r *FileRecorder) Record(e Entry) {
 		e.At = time.Now()
 	}
 
+	// Начало нового деплоя — рисуем разделитель в консоли, чтобы было видно,
+	// где заканчивается предыдущий вызов webhook и начинается следующий.
+	if e.Stage == StageStarted {
+		slog.Info(logDivider)
+	}
+
 	slog.Info("deploy",
 		"stage", e.Stage, "status", e.Status,
 		"command", e.Command, "ip", e.IP, "detail", e.Detail)
+
+	// Конец деплоя — закрывающий разделитель, чтобы блок был визуально замкнут.
+	if e.Stage == StageFinished {
+		slog.Info(logDivider)
+	}
 
 	line, err := json.Marshal(e)
 	if err != nil {
