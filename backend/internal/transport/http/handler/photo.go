@@ -85,11 +85,11 @@ func (h *PhotoHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(limit); err != nil {
 		if isMaxBytes(err) {
 			writeError(w, http.StatusRequestEntityTooLarge, "photo_too_large",
-				"Файл больше допустимого: максимум 16 МБ (с учётом служебных данных формы).")
+				"Файл слишком большой — максимум 16 МБ. Выберите файл поменьше.")
 			return
 		}
 		writeError(w, http.StatusBadRequest, "invalid_body",
-			"Не удалось разобрать форму загрузки. Отправьте файл как multipart/form-data в поле «photo».")
+			"Не удалось обработать загрузку. Выберите изображение и попробуйте снова.")
 		return
 	}
 
@@ -324,9 +324,9 @@ func isMaxBytes(err error) bool {
 }
 
 // mapPhotoError маппит ошибки photo-сервиса в HTTP-коды с понятными
-// пользователю сообщениями: важно объяснить НЕ только «что не так», но и
-// «почему» (особенно для подмены расширения — иначе пользователь, видя своё
-// «.png», недоумевает, почему файл «не изображение»).
+// пользователю сообщениями. Сообщения ориентированы на конечного
+// пользователя: коротко «что не так» и «что сделать», без технических
+// подробностей реализации (механизм проверки описан в docs/lr-avatar.md).
 func mapPhotoError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, photo.ErrEmpty):
@@ -334,14 +334,13 @@ func mapPhotoError(w http.ResponseWriter, err error) {
 			"Файл пустой: похоже, он не выбран или имеет нулевой размер. Выберите изображение и попробуйте снова.")
 	case errors.Is(err, photo.ErrTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "photo_too_large",
-			"Файл слишком большой — максимум 16 МБ. Выберите файл поменьше (сервер сам сожмёт изображение).")
+			"Файл слишком большой — максимум 16 МБ. Выберите файл поменьше.")
 	case errors.Is(err, photo.ErrImageTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "image_too_large",
-			"Слишком большое разрешение изображения (защита от «декомпресс-бомбы»): максимум ~40 мегапикселей. Уменьшите разрешение снимка.")
+			"Слишком большое разрешение изображения — максимум 40 мегапикселей. Уменьшите разрешение снимка.")
 	case errors.Is(err, photo.ErrInvalidImage):
 		writeError(w, http.StatusUnsupportedMediaType, "invalid_image",
-			"Не удалось распознать файл как изображение. Проверяется не имя и не расширение, а само содержимое (сигнатура байтов): "+
-				"внутри этого файла нет настоящего JPEG, PNG или WebP — вероятно, расширение подделано или файл повреждён.")
+			"Не удалось распознать файл как изображение. Загрузите фото в формате JPEG, PNG или WebP — возможно, файл повреждён или это не изображение.")
 	case errors.Is(err, photo.ErrNotFound):
 		writeError(w, http.StatusNotFound, "photo_not_found",
 			"У вас пока нет загруженной фотографии.")
