@@ -2,25 +2,44 @@
 # Git-webhook авто-деплоя (лаба №6) — сценарий для VS Code REST Client
 # (расширение humao.rest-client).
 #
-# Как пользоваться:
-#   1. В .env задай GIT_WEBHOOK_SECRET (иначе эндпоинт отвечает 503).
-#      Пример: openssl rand -hex 18   → строка 36 hex-символов.
-#   2. Подними стек: APP_PORT=8080 docker compose up -d --build
-#   3. Подставь свой ключ в @secret ниже.
-#   4. Нажимай "Send Request" над каждым запросом и смотри статус/тело.
+# ВАЖНО: backend для этого .http запускай ЛОКАЛЬНО через `go run`, НЕ в docker.
+# В docker-образе нет git и нет .git — pull внутри контейнера не пройдёт.
 #
-# Запросы идут через фронт-nginx на :8080 → проксируются на backend.
-# Маршрут открыт без авторизации (Bearer не нужен) — защита только ключом.
+# --- ЗАПУСК (один раз перед прогоном) ---
+# 1. Подними только Postgres (из корня проекта):
+#       docker compose up -d postgres
 #
-# Путь: основной /api/hooks/git (через прокси). Литеральный из ТЗ /hooks/git —
-# тот же обработчик, доступен при прямом обращении к бэкенду.
-# Для наглядного демо настоящего git pull: bash scripts/git-webhook-demo.sh
+# 2. Запусти backend локально. PowerShell (из корня проекта):
+#       $env:DB_HOST="127.0.0.1"; $env:DB_PORT="5432"
+#       $env:DB_NAME="academic_debts"; $env:DB_USER="academic"; $env:DB_PASSWORD="academic"
+#       $env:JWT_SECRET="8f4b2a8d3e9f1c7a6b5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b"
+#       $env:APP_PORT="8080"; $env:EMULATOR_URL=""; $env:ALLOWED_ORIGINS="*"
+#       $env:GIT_WEBHOOK_SECRET="mysecret123"
+#       $env:GIT_REPO_PATH=".."; $env:GIT_DEFAULT_BRANCH="lb12"
+#       cd backend; go run ./cmd/server
+#
+#    Git Bash (одной строкой, ИЗ ПАПКИ backend):
+#       DB_HOST=127.0.0.1 DB_PORT=5432 DB_NAME=academic_debts DB_USER=academic \
+#       DB_PASSWORD=academic JWT_SECRET=8f4b2a8d3e9f1c7a6b5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b \
+#       APP_PORT=8080 EMULATOR_URL= ALLOWED_ORIGINS=* GIT_WEBHOOK_SECRET=mysecret123 \
+#       GIT_REPO_PATH=.. GIT_DEFAULT_BRANCH=lb12 go run ./cmd/server
+#
+# 3. Дождись в логе "server starting" → жми "Send Request" над запросами ниже.
+#
+# Ожидаемо: #1/#2 верный ключ → 200 (JSON со списком шагов деплоя + warning);
+#           #3/#4 неверный ключ → 403; #5 без ключа → 403.
+#           Если GIT_WEBHOOK_SECRET пуст в окружении → любой запрос вернёт 503.
+#
+# Маршрут без авторизации (Bearer не нужен) — защита только ключом.
+# Путь /api/hooks/git. Литеральный из ТЗ /hooks/git — тот же обработчик.
+# Для демо НАСТОЯЩЕГО git pull (файл подтянулся): bash scripts/git-webhook-demo.sh
 ###############################################################################
 
 @baseUrl = http://localhost:8080
-@secret  = ЗАМЕНИ-НА-GIT_WEBHOOK_SECRET-ИЗ-ENV
+@secret  = mysecret123
 
 ### 1. Успешный деплой, ключ в JSON-теле → 200 + JSON со списком шагов
+
 POST {{baseUrl}}/api/hooks/git
 Content-Type: application/json
 

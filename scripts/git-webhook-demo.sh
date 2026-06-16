@@ -30,21 +30,33 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== 1. Throwaway git-репозиторий: origin с маркером, work отстаёт =="
-git init -q --bare "$TMP/origin.git"
-# Дефолтная ветка origin = main (надёжно на любой версии git, в т.ч. где
-# init.defaultBranch=master) — иначе клоны окажутся на master и pull не сойдётся.
-git -C "$TMP/origin.git" symbolic-ref HEAD refs/heads/main
-git clone -q "$TMP/origin.git" "$TMP/work"
+# GIT — обёртка над git с настройками, делающими демо переносимым:
+#   safe.bareRepository=all  — разрешает работать с локальным bare origin.git,
+#       даже если в глобальном конфиге стоит safe.bareRepository=explicit
+#       (Windows / новые версии git — иначе init/push в bare падает с fatal);
+#   init.defaultBranch=main  — игрушечные репозитории сразу на ветке main,
+#       чтобы checkout/pull в work сходились по ветке main с origin.
+GIT() { command git -c safe.bareRepository=all -c init.defaultBranch=main "$@"; }
+
+GIT init -q --bare "$TMP/origin.git"
+GIT clone -q "$TMP/origin.git" "$TMP/work"
 ( cd "$TMP/work"
   git config user.email demo@local; git config user.name Demo
+  git checkout -q -B main
   echo "initial" > README.md
-  git add README.md; git commit -q -m "init"; git branch -M main; git push -q origin main )
-git clone -q "$TMP/origin.git" "$TMP/seed"
+  git add README.md; git commit -q -m "init"; GIT push -q origin main )
+GIT clone -q "$TMP/origin.git" "$TMP/seed"
 MARKER="DEPLOY_MARKER_$(date +%s).txt"
 ( cd "$TMP/seed"
   git config user.email demo@local; git config user.name Demo
+  git checkout -q main
   echo "Этот файл подтянут webhook-ом $(date -u +%FT%TZ)" > "$MARKER"
-  git add "$MARKER"; git commit -q -m "add marker"; git push -q origin main )
+  git add "$MARKER"; git commit -q -m "add marker"; GIT push -q origin main )
+# Убеждаемся, что origin реально получил коммит с маркером — иначе демо
+# бессмысленно (нечего подтягивать). Падаем громко, а не врём «✅».
+if ! GIT -C "$TMP/origin.git" cat-file -e "main:$MARKER" 2>/dev/null; then
+  echo "  ❌ не удалось подготовить origin (push не прошёл) — см. вывод выше"; exit 1
+fi
 if [ -f "$TMP/work/$MARKER" ]; then echo "  ОШИБКА: маркер уже в work"; else echo "  ✅ work отстаёт от origin на коммит с $MARKER"; fi
 
 echo "== 2. Поднимаю Postgres + backend =="
