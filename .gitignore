@@ -19,3 +19,7 @@ Thumbs.db
 # Build caches / stray lockfiles
 frontend/.vite/
 /package-lock.json
+
+# Файл успеваемости преподавателя — содержит реальные ФИО студентов,
+# в публичный репозиторий не выкладываем (демо-файлы — attendance-sample.xlsx).
+docs/attendance-teacher.xlsx

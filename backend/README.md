@@ -148,7 +148,7 @@ backend/
 | GET | `/ws/notifications` | Auth (через query `token`) | WebSocket для push-уведомлений |
 
 ### История изменений (audit / undo)
-Полные срезы before/after мутаций пишутся в `change_logs` транзакционно вместе с операцией. История наружу отдаётся диффом: `changed_fields` = `{ поле: {old, new} }` (только изменившиеся). См. [docs/audit-logging.md](../docs/audit-logging.md).
+Полные срезы before/after мутаций пишутся в `change_logs` транзакционно вместе с операцией. История наружу отдаётся диффом: `changed_fields` = `{ поле: {old, new} }` (только изменившиеся). См. [docs/lr-logging.md](../docs/lr-logging.md).
 | Метод | Путь | Permission | Назначение |
 |---|---|---|---|
 | GET | `/api/changelog?limit=&offset=` | `changelog.view` | Общий журнал последних изменений по всем сущностям (новые сверху) |
@@ -273,7 +273,7 @@ make sqlc                     # перегенерировать internal/repo/q
 | Скрыть регистрацию | Убрана ссылка на регистрацию со страницы входа (ветка `chore/hide-register-link`) |
 | Восстановление пароля | Рабочий сброс по коду на email: notify + ручки `/api/auth/recover/*` (ветка `feat/password-reset`, миграция 00025) |
 | Аватар профиля | Загрузка/удаление аватара (bytea), `/api/me/avatar` + публичная отдача (рабочее дерево, миграция 00026) |
-| Логирование мутаций | История изменений users/roles + дифф `changed_fields` + undo: `/api/.../story`, `/api/changelog/:id/restore` (рабочее дерево, миграция 00027). См. [docs/audit-logging.md](../docs/audit-logging.md) |
+| Логирование мутаций | История изменений users/roles + дифф `changed_fields` + undo: `/api/.../story`, `/api/changelog/:id/restore` (рабочее дерево, миграция 00027). См. [docs/lr-logging.md](../docs/lr-logging.md) |
 | Git-webhook (лаба №6) | Авто-деплой `POST /api/hooks/git`: секретный ключ + `git checkout/reset/pull` под блокировкой + журнал + тесты (пакет `service/deploy`, рабочее дерево). См. [docs/git-webhook.md](../docs/git-webhook.md) |
 
 ### Покрытие тестами

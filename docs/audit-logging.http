@@ -99,5 +99,11 @@ Authorization: Bearer {{login.response.body.$.access_token}}
 GET {{baseUrl}}/api/roles/{{roleId}}/story
 Authorization: Bearer {{login.response.body.$.access_token}}
 
-### 12. Проверка прав: журнал без токена → 401 (не админ/не авторизован)
+### 12. История права — обычно пустой массив (права редко меняют после сидов),
+#       но эндпоинт существует и закрыт правом changelog.view. permId — uuid права.
+@permId = PASTE-PERMISSION-ID
+GET {{baseUrl}}/api/permissions/{{permId}}/story
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### 13. Проверка прав: журнал без токена → 401 (не админ/не авторизован)
 GET {{baseUrl}}/api/changelog?limit=10

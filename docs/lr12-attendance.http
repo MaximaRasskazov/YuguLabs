@@ -1,0 +1,131 @@
+###############################################################################
+# ЛР №12 — Авто-зачёт по файлу успеваемости.
+# Сценарий для VS Code REST Client (humao.rest-client).
+#
+# Эндпоинт:
+#   POST /api/attendance/calculate — multipart, поле "file" (.xlsx).
+#   Доступ: только админ (permission calculate-attendance).
+#
+# Как пользоваться:
+#   1. Подними стек:  docker compose up -d --build
+#      (или локально: cd backend && go run ./cmd/server)
+#   2. Рядом с этим файлом лежит готовый attendance-sample.xlsx (см. шаг #2).
+#   3. Жми "Send Request" над каждым запросом по порядку.
+#
+# Что доказывает сценарий:
+#   • #2 — успешный расчёт: структура JSON ровно по ТЗ (leasons, проценты,
+#          result, итоги по группам, automatic_success_students).
+#   • #3 — без токена → 401 (маршрут под Auth).
+#   • #4 — обычный пользователь без права → 403.
+#   • #5 — нет файла → 400.
+#   • #6 — не .xlsx → 422.
+###############################################################################
+
+@baseUrl     = http://localhost:8080
+@adminEmail  = admin@academic.local
+@userEmail   = student@academic.local
+@password    = password
+
+### 1. Логин админом — access_token подставляется в запросы ниже
+# @name login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "email": "{{adminEmail}}", "password": "{{password}}" }
+
+### 2. ГЛАВНОЕ: загрузить attendance-sample.xlsx → 200 + отчёт по группам
+#      В ответе: Иванов (80% + 5 лаб) → result=true; Сидорова (авто-зачёт) →
+#      result=true; Петров/Кузнецов → false. Плюс automatic_success_students.
+POST {{baseUrl}}/api/attendance/calculate
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=----att
+
+------att
+Content-Disposition: form-data; name="file"; filename="attendance-sample.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./attendance-sample.xlsx
+------att--
+
+### 2-bis. ДЕМО СИНОНИМОВ: разные варианты записи флагов всё равно понимаются.
+#      В файле «Посещение» записано как 1/да/yes/+/true, пропуски — 0/нет/no,
+#      подгруппа пустая (→1), лабы как «5.0». Ожидаем:
+#      Синонимов Семён → 100%, зачёт; Автоматов Антон → авто-зачёт; Дробный → нет.
+#      СОВЕТ ДЛЯ ЗАЩИТЫ: открой файл в Excel, поправь дату в одной строке на
+#      «23-09-2024» (через дефис) и отправь снова — получишь 422 invalid_row
+#      с номером строки. Это и есть доказательство, что проверка реальна.
+POST {{baseUrl}}/api/attendance/calculate
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=----att
+
+------att
+Content-Disposition: form-data; name="file"; filename="attendance-synonyms-demo.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./attendance-synonyms-demo.xlsx
+------att--
+
+### 3. Без токена → 401 Unauthorized (доступ закрыт)
+POST {{baseUrl}}/api/attendance/calculate
+Content-Type: multipart/form-data; boundary=----att
+
+------att
+Content-Disposition: form-data; name="file"; filename="attendance-sample.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./attendance-sample.xlsx
+------att--
+
+### 4а. Логин обычным пользователем (нет права calculate-attendance)
+#       Подставь реального студента/учётку без права. Если такого нет —
+#       пропусти шаги 4а/4б.
+# @name userlogin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "email": "{{userEmail}}", "password": "{{password}}" }
+
+### 4б. Запрос пользователем без права → 403 Forbidden
+POST {{baseUrl}}/api/attendance/calculate
+Authorization: Bearer {{userlogin.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=----att
+
+------att
+Content-Disposition: form-data; name="file"; filename="attendance-sample.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./attendance-sample.xlsx
+------att--
+
+### 5. Админ, но без файла → 400 invalid_file (валидация поля file)
+POST {{baseUrl}}/api/attendance/calculate
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=----att
+
+------att
+Content-Disposition: form-data; name="dummy"
+
+нет файла
+------att--
+
+### 6. Файл не .xlsx (расширение .txt) → 422 invalid_file_type
+POST {{baseUrl}}/api/attendance/calculate
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=----att
+
+------att
+Content-Disposition: form-data; name="file"; filename="notes.txt"
+Content-Type: text/plain
+
+это текст, а не книга Excel
+------att--
+
+###############################################################################
+# Не вошло (трудно показать без отдельной фикстуры):
+#   • файл > UPLOAD_MAX_SIZE_MB → 413 file_too_large (потолок http.MaxBytesReader).
+#   • битая дата/тип/флаг в строке → 422 invalid_row (с номером строки) —
+#     покрыто Go-юнит-тестом TestCalculate_InvalidRows.
+#   • нет листа «Посещаемость» → 422 sheet_not_found (TestCalculate_SheetNotFound).
+#   • нет обязательной колонки → 422 missing_columns (TestCalculate_MissingColumns).
+#   • слишком много строк (xlsx-бомба) → 413 too_many_rows (TestParser_TooManyRows).
+###############################################################################
