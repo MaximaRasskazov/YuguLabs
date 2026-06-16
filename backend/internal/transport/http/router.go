@@ -24,6 +24,7 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/config"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/attendance"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changerequest"
@@ -68,6 +69,7 @@ type Deps struct {
 	Changelog       *changelog.Service
 	Deploy          *deploy.Service
 	Photos          *photo.Service
+	Attendance      *attendance.Service
 }
 
 // NewRouter собирает chi-роутер: middleware → /health → /api/* → /ws/*.
@@ -140,6 +142,7 @@ func NewRouter(d Deps) http.Handler {
 		mountDirectory(r, d)
 		mountChangelog(r, d)
 		mountPhoto(r, d)
+		mountAttendance(r, d)
 	})
 
 	// Webhook авто-деплоя — вне таймаут-группы (git pull может идти дольше

@@ -67,6 +67,14 @@ type Config struct {
 	GitRepoPath      string
 	GitDeployLog     string
 	GitDeployTimeout time.Duration
+
+	// Attendance — параметры авто-зачёта по файлу успеваемости (лаба №12).
+	// RequiredLabs — сколько лаб нужно сдать для зачёта.
+	// AttendanceThreshold — минимальный процент посещаемости (0..100).
+	// UploadMaxSizeMB — потолок размера загружаемого .xlsx в мегабайтах.
+	RequiredLabs        int
+	AttendanceThreshold int
+	UploadMaxSizeMB     int
 }
 
 // Load читает .env (если есть) и собирает Config из ENV.
@@ -122,6 +130,10 @@ func Load() (*Config, error) {
 		GitRepoPath:      getEnv("GIT_REPO_PATH", "."),
 		GitDeployLog:     getEnv("GIT_DEPLOY_LOG", "storage/logs/deployment.log"),
 		GitDeployTimeout: parseDurationOrDefault("GIT_DEPLOY_TIMEOUT", 5*time.Minute),
+
+		RequiredLabs:        parseInt("REQUIRED_LABS", 5),
+		AttendanceThreshold: parseInt("ATTENDANCE_PERCENT_THRESHOLD", 80),
+		UploadMaxSizeMB:     parseInt("UPLOAD_MAX_SIZE_MB", 10),
 	}
 
 	if cfg.DBName == "" || cfg.DBUser == "" {
@@ -134,6 +146,19 @@ func Load() (*Config, error) {
 	}
 	if len(cfg.JWTSecret) < 32 {
 		return nil, fmt.Errorf("JWT_SECRET must be at least 32 bytes (got %d)", len(cfg.JWTSecret))
+	}
+
+	// Attendance-параметры должны быть положительными, иначе расчёт
+	// процентов делил бы на ноль / выдавал бы бессмыслицу. Падаем на
+	// старте, а не на первом запросе с файлом.
+	if cfg.RequiredLabs <= 0 {
+		return nil, fmt.Errorf("REQUIRED_LABS must be > 0 (got %d)", cfg.RequiredLabs)
+	}
+	if cfg.AttendanceThreshold < 0 || cfg.AttendanceThreshold > 100 {
+		return nil, fmt.Errorf("ATTENDANCE_PERCENT_THRESHOLD must be in [0,100] (got %d)", cfg.AttendanceThreshold)
+	}
+	if cfg.UploadMaxSizeMB <= 0 {
+		return nil, fmt.Errorf("UPLOAD_MAX_SIZE_MB must be > 0 (got %d)", cfg.UploadMaxSizeMB)
 	}
 
 	return cfg, nil

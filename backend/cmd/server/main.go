@@ -26,6 +26,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/attendance"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/auth"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
@@ -100,6 +101,10 @@ func run() error {
 	photoSvc.SetChangelog(changelogSvc)
 	disciplineSvc := discipline.New(store, auditSvc, changelogSvc)
 	reportSvc := report.New(store)
+
+	// Авто-зачёт по файлу успеваемости (лаба №12). Без БД: на вход .xlsx,
+	// на выход JSON. Правила зачёта берутся из конфигурации.
+	attendanceSvc := attendance.New(cfg.RequiredLabs, cfg.AttendanceThreshold)
 
 	usersSvc := usersvc.New(store)
 	// Админская правка профиля (PATCH /api/users/{id}) пишется в change_logs
@@ -225,6 +230,7 @@ func run() error {
 		Changelog:       changelogSvc,
 		Deploy:          deploySvc,
 		Photos:          photoSvc,
+		Attendance:      attendanceSvc,
 	})
 
 	srv := &http.Server{
