@@ -270,17 +270,26 @@ TC-20). Покрыто `TestCalculate_Boundaries`: 80%+5лаб → true; 100%+4�
 
 ### 11. Как валидируется файл (Form Request в Laravel → что у вас)?
 
-В хендлере, до и во время чтения:
-- **размер** — `http.MaxBytesReader` с лимитом `UPLOAD_MAX_SIZE_MB` → **413**;
-- **наличие** поля `file` → иначе **400**;
-- **расширение** `.xlsx` → иначе **422** (быстрый отсев);
-- **содержимое** — реальный разбор через excelize; если это не книга Excel →
-  **400** (`invalid_file`); если книга, но нет листа/колонок/строка битая →
-  **422** с пояснением.
+Цепочка проверок от «дешёвого к дорогому»:
 
-Проверка расширения — лишь быстрый фильтр; **настоящая** проверка типа — это
-попытка распарсить байты как `.xlsx`. Переименованный `.txt` в `.xlsx` не
-пройдёт разбор.
+| # | Где | Что проверяется | Ошибка |
+|---|-----|-----------------|--------|
+| 1 | [`handler/attendance.go:42`](../backend/internal/transport/http/handler/attendance.go) | **Размер тела** — `http.MaxBytesReader(UPLOAD_MAX_SIZE_MB)` | 413 `file_too_large` |
+| 2 | [`handler/attendance.go:54`](../backend/internal/transport/http/handler/attendance.go) | **Наличие поля** `file` в multipart | 400 `invalid_file` |
+| 3 | [`parser.go:63`](../backend/internal/service/attendance/parser.go) | **Сигнатура формата** — первые 4 байта `PK\x03\x04` (ZIP/XLSX magic) | 422 `invalid_file_type` |
+| 4 | [`parser.go:71`](../backend/internal/service/attendance/parser.go) | **Валидная книга** — `excelize.OpenReader` реально распаковывает ZIP и парсит `xl/worksheets/` | 400 `invalid_file` |
+| 5 | [`parser.go:85`](../backend/internal/service/attendance/parser.go) | **Число строк** ≤ `maxDataRows` (200 000) | 413 `too_many_rows` |
+| 6 | [`parser.go:91`](../backend/internal/service/attendance/parser.go) | **Обязательные колонки** по заголовкам | 422 `missing_columns` |
+| 7 | [`parser.go:99`](../backend/internal/service/attendance/parser.go) | **Каждая строка** (типы, форматы дат/времени, флаги) | 422 `invalid_row` с номером строки |
+
+**Почему сигнатура, а не расширение?** Расширение файла (`filename.xlsx`) — это
+только метаданные от клиента: пользователь может переименовать `.txt` в `.xlsx`.
+Сигнатурная проверка читает первые 4 байта содержимого — это объективный признак
+формата ZIP/XLSX, который нельзя подделать просто переименованием. Расширение
+файла в хендлере **не проверяется** намеренно.
+
+> `PK\x03\x04` — стандартная ZIP-сигнатура Local File Header. XLSX обязательно
+> начинается с неё, так как является ZIP-архивом XML-файлов (`xl/workbook.xml` и др.).
 
 ### 12. Что считается «структурной» ошибкой файла, а что — ошибкой строки?
 

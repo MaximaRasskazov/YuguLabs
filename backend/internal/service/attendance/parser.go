@@ -24,7 +24,16 @@ var (
 	// ErrTooManyRows — в листе слишком много строк (защита от «xlsx-бомбы»:
 	// маленький по размеру файл, разворачивающийся в миллионы строк).
 	ErrTooManyRows = errors.New("attendance: в листе слишком много строк")
+	// ErrNotXLSX — файл не проходит проверку по сигнатуре: первые байты
+	// не соответствуют формату ZIP/XLSX (PK\x03\x04). Расширение файла
+	// не проверяется — оно не является надёжным признаком формата.
+	ErrNotXLSX = errors.New("attendance: файл не является XLSX (неверная сигнатура формата)")
 )
+
+// xlsxMagic — первые четыре байта любого XLSX-файла (ZIP PK-сигнатура).
+// XLSX — это ZIP-архив; файл с любым расширением, чьё содержимое не начинается
+// с этих байт, заведомо не является книгой Excel.
+var xlsxMagic = []byte{0x50, 0x4B, 0x03, 0x04}
 
 // maxDataRows — потолок числа строк данных (без заголовка), которые мы готовы
 // обработать. Лимит по размеру файла (UPLOAD_MAX_SIZE_MB) не спасает от
@@ -58,6 +67,9 @@ func NewParser() *Parser { return &Parser{} }
 //
 // Пустой файл (только заголовки) — не ошибка: вернётся пустой срез.
 func (p *Parser) Parse(content []byte) ([]RawRow, error) {
+	if len(content) < 4 || !bytes.HasPrefix(content, xlsxMagic) {
+		return nil, ErrNotXLSX
+	}
 	f, err := excelize.OpenReader(bytes.NewReader(content))
 	if err != nil {
 		return nil, fmt.Errorf("attendance: не удалось открыть .xlsx: %w", err)

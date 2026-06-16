@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/attendance"
 )
@@ -51,7 +50,7 @@ func (h *AttendanceHandler) Calculate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, header, err := r.FormFile("file")
+	file, _, err := r.FormFile("file")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_file",
 			"Файл не найден в запросе. Приложите .xlsx в поле «file».")
@@ -59,14 +58,9 @@ func (h *AttendanceHandler) Calculate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = file.Close() }()
 
-	// Проверяем расширение до чтения: быстрый отсев .txt/.csv (TC-10). Это не
-	// замена строгой проверки — её делает excelize при разборе содержимого.
-	if header != nil && !strings.HasSuffix(strings.ToLower(header.Filename), ".xlsx") {
-		writeError(w, http.StatusUnprocessableEntity, "invalid_file_type",
-			"Файл должен быть в формате .xlsx.")
-		return
-	}
-
+	// Расширение файла намеренно не проверяется: проверка по сигнатуре
+	// (первые 4 байта ZIP PK\x03\x04) происходит в parser.Parse —
+	// она надёжнее, так как не зависит от имени файла.
 	content, err := io.ReadAll(file)
 	if err != nil {
 		if isMaxBytes(err) {
@@ -97,6 +91,9 @@ func (h *AttendanceHandler) tooLarge(w http.ResponseWriter) {
 // особенно для битой строки (ErrRowInvalid уже несёт номер строки и причину).
 func (h *AttendanceHandler) mapCalcError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, attendance.ErrNotXLSX):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_file_type",
+			"Файл не является XLSX — проверьте формат (ожидается книга Excel .xlsx).")
 	case errors.Is(err, attendance.ErrSheetNotFound):
 		writeError(w, http.StatusUnprocessableEntity, "sheet_not_found",
 			"В книге нет листа «Посещаемость» — проверьте имя листа.")
